@@ -318,16 +318,17 @@ pull requests.
 
 This project is distributed under the [MIT License](LICENSE).
 
-The DDS header parsing code is derived from
-[Blender-DDS-Addon](https://github.com/matyalatte/Blender-DDS-Addon) and is
-licensed under the MIT License. No Battlefield 2 game data is included.
+Blender 5.2's native image loader handles DDS import. DDS export uses this
+project's platform-independent Python and NumPy encoder.
+
+No original Battlefield 2 mesh, texture, animation, level, or other asset
+files are distributed with this project. Documentation screenshots and the
+animated exemplar were rendered from user-owned retail assets.
 
 ## Credits
 
 - [Marek Zajac](https://github.com/marekzajac97) for creating and maintaining
   the original add-on
-- [matyalatte](https://github.com/matyalatte) for the original DDS header
-  parsing code
 - [rpoxo](https://github.com/rpoxo) for
   [bf2mesh](https://github.com/rpoxo/bf2mesh), used for the initial mesh
   importer

@@ -44,7 +44,6 @@ from io_scene_bf2.core.utils.mesh import set_mesh_geometry
 from io_scene_bf2.core.tools.lightmapping.scene import (
     SECONDARY_TERRAIN_COLORMAP_INDEX,
 )
-from io_scene_bf2.directx.dds import DDSHeader
 from io_scene_bf2.directx.dds_encoder import save_dds
 from io_scene_bf2.operators.ops_prefs import BF2AddonPreferences
 
@@ -56,6 +55,30 @@ def _make_test_pixels():
     pixels[4:, :4] = (0.0, 0.0, 1.0, 0.4)
     pixels[4:, 4:] = (1.0, 1.0, 1.0, 0.8)
     return pixels
+
+
+def _dds_payload_size(filepath, compression):
+    with open(filepath, "rb") as dds_file:
+        header = dds_file.read(128)
+    if len(header) != 128 or header[:4] != b"DDS ":
+        raise AssertionError(f"{compression}: invalid legacy DDS header")
+
+    height, width = struct.unpack_from("<II", header, 12)
+    mipmap_count = max(1, struct.unpack_from("<I", header, 28)[0])
+    block_size = {"DXT1": 8, "DXT3": 16, "DXT5": 16}.get(compression)
+
+    payload_size = 0
+    for _ in range(mipmap_count):
+        if block_size is None:
+            payload_size += width * height * 4
+        else:
+            payload_size += max(1, (width + 3) // 4) * max(
+                1,
+                (height + 3) // 4,
+            ) * block_size
+        width = max(1, width // 2)
+        height = max(1, height // 2)
+    return payload_size
 
 
 def _road_bytes():
@@ -551,8 +574,7 @@ def main():
             for compression in ("NONE", "DXT1", "DXT3", "DXT5"):
                 filepath = Path(temporary_dir) / f"roundtrip_{compression}.dds"
                 save_img_as_dds(image, str(filepath), compression)
-                header = DDSHeader.read_from_file(filepath)
-                if sum(size for _, _, _, size in header.get_mip_sizes()) != filepath.stat().st_size - 128:
+                if _dds_payload_size(filepath, compression) != filepath.stat().st_size - 128:
                     raise AssertionError(f"{compression}: DDS mip sizes do not match the payload")
 
                 loaded_image = bpy.data.images.load(str(filepath), check_existing=False)
