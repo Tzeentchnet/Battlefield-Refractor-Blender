@@ -1,12 +1,12 @@
 schema_version = "1.0.0"
 id = "io_scene_bf2"
-version = "0.18.0"
-name = "Battlefield 2"
+version = "0.20.0"
+name = "Battlefield Refractor Blender"
 tagline = "Import and export asset files for DICE's Refractor 2 engine"
 maintainer = "Tzeentchnet"
 type = "add-on"
 
-website = "https://github.com/Tzeentchnet/bf2-blender"
+website = "https://github.com/Tzeentchnet/Battlefield-Refractor-Blender"
 tags = ["Game Engine", "Import-Export"]
 blender_version_min = "5.2.0"
 

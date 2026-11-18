@@ -106,13 +106,14 @@ class MainConsole():
             self.report('Unknown object')
             return
 
-        obj_method = None
+        obj_method = obj_class_or_instance
         try:
-            obj_method = igetattr(obj_class_or_instance, method_name)
+            for component in method_name.split('.'):
+                obj_method = igetattr(obj_method, component)
             if not callable(obj_method) or not getattr(obj_method, '_console_callable', False):
                 obj_method = None
         except AttributeError:
-            pass
+            obj_method = None
 
         if not obj_method:
             self.report('Unknown method')

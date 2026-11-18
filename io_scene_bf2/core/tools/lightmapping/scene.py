@@ -2,6 +2,7 @@ import os
 import os.path as path
 import bpy # type: ignore
 import bmesh # type: ignore
+import numpy as np
 from mathutils import Matrix, Vector # type: ignore
 
 from typing import Dict, List
@@ -13,19 +14,23 @@ from ...bf2.bf2_engine import (BF2Engine,
                             HeightmapCluster,
                             Object)
 from ...bf2.bf2_mesh import BF2BundledMesh, BF2StaticMesh, BF2SkinnedMesh, BF2Samples
+from ...bf2.bf2_terrain import BF2Terrain, BF2TerrainException
 from ...mod_loader import ModLoader
 from ...utils.compat import set_gn_modifier_input
 from ...material import (setup_material,
                         get_material_maps,
                         get_staticmesh_uv_channel_mapping,
-                        STATICMESH_TEXUTRE_MAP_TYPES)
+                        STATICMESH_TEXUTRE_MAP_TYPES,
+                        load_texture_image)
 from ...mesh import MeshImporter, MeshExporter
+from ...road import import_compiled_roads
+from ...terrain import make_primary_terrain_material
 from ...utils import (DEFAULT_REPORTER,
                     file_name,
                     delete_object,
                     remove_double_verts)
 from ...utils.convert import swap_zy, yaw_pitch_roll_to_matrix, conv_pos, conv_rot, to_matrix
-from ...heightmap import import_heightmap_from
+from ...heightmap import import_heightmap_from, make_water_plane
 from ...exceptions import ImportException
 from fnmatch import fnmatch
 from .common import plug_socket_to, unplug_socket_from, gen_lm_key
@@ -114,6 +119,17 @@ DEFAULT_LM_SIZE_TO_SURFACE_AREA_THRESHOLDS = [
 ]
 
 DEFAULT_USE_LIGHTMAP_SAMPLES = True
+
+SECONDARY_TERRAIN_COLORMAP_INDEX = {
+    (-1, -1): 0,
+    (0, -1): 1,
+    (1, -1): 2,
+    (-1, 0): 3,
+    (1, 0): 4,
+    (-1, 1): 5,
+    (0, 1): 6,
+    (1, 1): 7,
+}
 
 MESH_TYPES = {
     'StaticMesh': BF2StaticMesh,
@@ -377,26 +393,77 @@ def _make_water_depth_material():
     node_tree.links.new(diffuse_bsdf.outputs['BSDF'], material_output.inputs['Surface'])
     return material
 
-def _make_default_terrain_material(minimap_path):
-    if 'DefaultTerrain' in bpy.data.materials:
-        terrain = bpy.data.materials['DefaultTerrain']
+def _make_default_terrain_material(texture_file, texture_paths=(),
+                                   texture_data_loader=None,
+                                   name='DefaultTerrain'):
+    if name in bpy.data.materials:
+        terrain = bpy.data.materials[name]
         bpy.data.materials.remove(terrain)
 
-    material = bpy.data.materials.new('DefaultTerrain')     
+    material = bpy.data.materials.new(name)
     material.use_nodes = True
     
     tex_node = material.node_tree.nodes.new('ShaderNodeTexImage')
-    try:
-        tex_node.image = bpy.data.images.load(minimap_path, check_existing=True)
+    tex_node.label = 'BF2 Terrain Color'
+    tex_node.image = load_texture_image(
+        texture_file,
+        texture_paths=texture_paths,
+        texture_data_loader=texture_data_loader,
+    )
+    if tex_node.image:
         tex_node.image.alpha_mode = 'NONE'
-    except RuntimeError:
-        pass # ignore if can't be loaded
 
     bsdf = material.node_tree.nodes['Principled BSDF']
     bsdf.inputs['Roughness'].default_value = 1
     bsdf.inputs['Specular IOR Level'].default_value = 0
     bsdf.inputs['IOR'].default_value = 1.1
-    material.node_tree.links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
+    if tex_node.image:
+        material.node_tree.links.new(
+            tex_node.outputs['Color'],
+            bsdf.inputs['Base Color'],
+        )
+    else:
+        bsdf.inputs['Base Color'].default_value = (0.18, 0.22, 0.12, 1)
+    material['bf2_source_texture'] = texture_file
+    material['bf2_source_texture_loaded'] = bool(tex_node.image)
+    return material
+
+
+def _normalized_color(color):
+    divisor = 255.0 if any(component > 1.0 for component in color) else 1.0
+    return tuple(
+        min(max(component / divisor, 0.0), 1.0)
+        for component in color
+    )
+
+
+def _make_water_material(renderer_settings):
+    name = 'BF2 Water'
+    if name in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials[name])
+
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    material.surface_render_method = 'BLENDED'
+    shader = material.node_tree.nodes['Principled BSDF']
+    water_color = _normalized_color(renderer_settings.water_color)
+    specular_color = _normalized_color(
+        renderer_settings.water_specular_color[:3]
+    )
+    shader.inputs['Base Color'].default_value = (*water_color, 1.0)
+    shader.inputs['Roughness'].default_value = 0.18
+    shader.inputs['Metallic'].default_value = 0.05
+    shader.inputs['IOR'].default_value = 1.333
+    shader.inputs['Alpha'].default_value = 0.72
+    if 'Transmission Weight' in shader.inputs:
+        shader.inputs['Transmission Weight'].default_value = 0.25
+    material.diffuse_color = (*water_color, 0.72)
+    material['bf2_specular_color'] = specular_color
+    material['bf2_specular_power'] = renderer_settings.water_specular_power
+    material['bf2_water_scroll'] = renderer_settings.water_scroll
+    material['bf2_water_animation_speed'] = (
+        renderer_settings.water_animation_speed
+    )
     return material
 
 def _add_ao_node(material):
@@ -551,52 +618,207 @@ def _calc_mesh_area(mesh):
     bm.free()
     return area
 
-def _load_heightmap(context, level_dir, engine):
+def _load_heightmap(context, level_dir, engine, load_all=False,
+                    create_water=False, prepare_lightmaps=True,
+                    texture_paths=(), texture_data_loader=None,
+                    reporter=DEFAULT_REPORTER):
     file_manager = engine.file_manager
     main_console = engine.main_console
+
+    try:
+        main_console.run_file(
+            path.join(level_dir, 'Terrain.con'),
+            args=['BF2Editor'],
+        )
+    except FileManagerFileNotFound:
+        reporter.warning(
+            f"Level '{level_dir}' has no Terrain.con; using conventional "
+            'terrain texture paths'
+        )
 
     main_console.run_file(path.join(level_dir, 'Heightdata.con'))
     hm_cluster = engine.get_manager(HeightmapCluster).active_obj
     if not hm_cluster:
         return
-    for heightmap in hm_cluster.heightmaps:
-        if heightmap.cluster_offset == (0, 0): # load primary only
-            break
-    else:
+    selected_heightmaps = [
+        heightmap
+        for heightmap in hm_cluster.heightmaps
+        if load_all or heightmap.cluster_offset == (0, 0)
+    ]
+    if not selected_heightmaps:
         return
     
     heightmaps = _make_collection(context, "Heightmaps")
+    overview_texture_file = path.join(
+        level_dir,
+        'Hud',
+        'Minimap',
+        'ingameMap.dds',
+    )
+    compiled_terrain = None
+    compiled_terrain_file = (
+        engine.terrain_settings.data_file
+        or path.join(level_dir, 'terraindata.raw')
+    )
+    if not prepare_lightmaps:
+        try:
+            compiled_terrain = BF2Terrain.load_from(
+                compiled_terrain_file,
+                file_manager.readFile(
+                    compiled_terrain_file,
+                    as_stream=True,
+                ),
+            )
+        except (FileManagerFileNotFound, BF2TerrainException) as exc:
+            reporter.warning(
+                f"Could not load detailed terrain material data from "
+                f"'{compiled_terrain_file}': {exc}"
+            )
 
-    location = hm_cluster.heightmap_size * Vector(heightmap.cluster_offset)
-    data = file_manager.readFile(heightmap.raw_file, as_stream=True)
-    terrain = import_heightmap_from(context, data, name=file_name(heightmap.raw_file),
-                                    bit_res=heightmap.bit_res, scale=swap_zy(heightmap.scale))
-    context.scene.collection.objects.unlink(terrain)
-    heightmaps.objects.link(terrain)
-    terrain.location.x = location.x
-    terrain.location.y = location.y
+    primary_material = None
+    if compiled_terrain is not None:
+        primary_material = make_primary_terrain_material(
+            'DefaultTerrain',
+            compiled_terrain,
+            overview_texture_file,
+            texture_paths=texture_paths,
+            texture_data_loader=texture_data_loader,
+            reporter=reporter,
+        )
+    if primary_material is None:
+        primary_material = _make_default_terrain_material(
+            overview_texture_file,
+            texture_paths=texture_paths,
+            texture_data_loader=texture_data_loader,
+        )
+    secondary_materials = {}
 
-    # enable smooth shading for the terrain
-    context.view_layer.objects.active = terrain
-    terrain.select_set(True)
-    bpy.ops.object.shade_smooth()
-    terrain.select_set(False)
+    imported_terrain = []
+    for heightmap in selected_heightmaps:
+        location = hm_cluster.heightmap_size * Vector(
+            heightmap.cluster_offset
+        )
+        data = file_manager.readFile(heightmap.raw_file, as_stream=True)
+        terrain = import_heightmap_from(
+            context,
+            data,
+            name=file_name(heightmap.raw_file),
+            bit_res=heightmap.bit_res,
+            scale=swap_zy(heightmap.scale),
+        )
+        context.scene.collection.objects.unlink(terrain)
+        heightmaps.objects.link(terrain)
+        terrain.location.x = location.x
+        terrain.location.y = location.y
+        terrain['bf2_cluster_offset'] = heightmap.cluster_offset
+        terrain['bf2_source_heightmap'] = heightmap.raw_file
+        terrain['bf2_primary_heightmap'] = (
+            heightmap.cluster_offset == (0, 0)
+        )
+        if (
+            heightmap.cluster_offset == (0, 0)
+            and compiled_terrain is not None
+        ):
+            terrain['bf2_compiled_terrain'] = compiled_terrain_file
+            terrain['bf2_terrain_material_count'] = len(
+                compiled_terrain.materials
+            )
+        if len(terrain.data.polygons):
+            terrain.data.polygons.foreach_set(
+                'use_smooth',
+                np.ones(len(terrain.data.polygons), dtype=np.bool_),
+            )
 
-    # load minimap as diffuse texture on primary heightmap and waterplane
-    minimap_path = path.join(level_dir, 'Hud', 'Minimap', 'ingameMap.dds')
-    material = _make_default_terrain_material(minimap_path)
-    terrain.data.materials.append(material)
+        is_primary = heightmap.cluster_offset == (0, 0)
+        material = primary_material
+        if not is_primary:
+            colormap_index = SECONDARY_TERRAIN_COLORMAP_INDEX.get(
+                heightmap.cluster_offset
+            )
+            if colormap_index is None:
+                material = _make_default_terrain_material(
+                    '',
+                    name=(
+                        'BF2 Secondary Terrain '
+                        f'{heightmap.cluster_offset[0]} '
+                        f'{heightmap.cluster_offset[1]}'
+                    ),
+                )
+                reporter.warning(
+                    'No standard BF2 secondary-terrain colormap mapping for '
+                    f'cluster offset {heightmap.cluster_offset}; using the '
+                    'neutral fallback material'
+                )
+            else:
+                material = secondary_materials.get(colormap_index)
+                if material is None:
+                    colormap_base_name = (
+                        engine.terrain_settings.colormap_base_name
+                        or path.join(level_dir, 'Colormaps', 'tx')
+                    )
+                    colormap_file = (
+                        f'{colormap_base_name}_s{colormap_index}.dds'
+                    )
+                    material = _make_default_terrain_material(
+                        colormap_file,
+                        texture_paths=texture_paths,
+                        texture_data_loader=texture_data_loader,
+                        name=f'BF2 Secondary Terrain s{colormap_index}',
+                    )
+                    secondary_materials[colormap_index] = material
+                    if not material['bf2_source_texture_loaded']:
+                        reporter.warning(
+                            f"Secondary-terrain colormap '{colormap_file}' "
+                            'was not found; using the neutral fallback '
+                            'material'
+                        )
 
-    # setup waterdepth material, will be used later
-    terrain['water_attenuation'] = 0.15
-    terrain['water_level'] = hm_cluster.water_level
-    material = _make_water_depth_material() 
-    material.use_fake_user = True
+        terrain.data.materials.append(material)
+        if not is_primary:
+            terrain['bf2_secondary_colormap'] = material[
+                'bf2_source_texture'
+            ]
+        imported_terrain.append(terrain)
 
-    modifier = terrain.modifiers.new(type='NODES', name="FlattenAtWaterLevel")
-    modifier.node_group = _make_flatten_at_water_level()
-    input_id = modifier.node_group.interface.items_tree["Water Level"].identifier
-    set_gn_modifier_input(modifier, input_id, hm_cluster.water_level)
+        if prepare_lightmaps and is_primary:
+            terrain['water_attenuation'] = 0.15
+            terrain['water_level'] = hm_cluster.water_level
+            material = _make_water_depth_material()
+            material.use_fake_user = True
+
+            modifier = terrain.modifiers.new(
+                type='NODES',
+                name="FlattenAtWaterLevel",
+            )
+            modifier.node_group = _make_flatten_at_water_level()
+            input_id = modifier.node_group.interface.items_tree[
+                "Water Level"
+            ].identifier
+            set_gn_modifier_input(
+                modifier,
+                input_id,
+                hm_cluster.water_level,
+            )
+
+    water = None
+    if create_water:
+        water = make_water_plane(
+            context,
+            hm_cluster.cluster_size * hm_cluster.heightmap_size,
+            hm_cluster.water_level,
+            name='BF2 Water',
+        )
+        context.scene.collection.objects.unlink(water)
+        water_collection = _make_collection(context, 'Water')
+        water_collection.objects.link(water)
+        water.data.materials.append(
+            _make_water_material(engine.renderer_settings)
+        )
+        water['bf2_water_level'] = hm_cluster.water_level
+        water['bf2_cluster_size'] = hm_cluster.cluster_size
+        water['bf2_heightmap_size'] = hm_cluster.heightmap_size
+
+    return imported_terrain, water
 
 def _match_config_pattern(value, config, prop, get_pattern=None):
     for prop_val in getattr(config, prop, []):
@@ -689,7 +911,8 @@ def _get_template_configs(template, matrix, config, templates : Dict[str, Object
             child_matrix.translation = swap_zy(child.position)
             _get_template_configs(child.template, matrix @ child_matrix, config, templates, reporter, engine)
 
-def _do_material_tweaks(config, geom_temp_name, geom, texture_paths, ray_vis_mask, reporter):
+def _do_material_tweaks(config, geom_temp_name, geom, texture_paths,
+                        ray_vis_mask, reporter, texture_data_loader=None):
     materials_done = set()
     for lod_obj in geom:
         mesh = lod_obj.data
@@ -736,7 +959,13 @@ def _do_material_tweaks(config, geom_temp_name, geom, texture_paths, ray_vis_mas
                 modified = True
 
             if modified:
-                setup_material(material, texture_paths=texture_paths, reporter=reporter, backface_cull=backface_cull) # re-apply
+                setup_material(
+                    material,
+                    texture_paths=texture_paths,
+                    reporter=reporter,
+                    backface_cull=backface_cull,
+                    texture_data_loader=texture_data_loader,
+                ) # re-apply
 
             for map_name, ray_mask in ray_masks_to_add.items():
                 tex_node = _add_texture_node(material, ray_mask, map_to_uv[map_name], texture_paths, reporter)
@@ -778,15 +1007,44 @@ def _run_all_con_files(root_dir, engine):
                 main_console.run_file(os.path.join(root, filename))
 
 def load_level(context, level_dir, use_cache=True,
-               load_unpacked=True, load_static_objects=True,
+               load_unpacked=None, load_static_objects=True,
                load_overgrowth=True, load_heightmap=True, load_lights=True,
-               mod_dirs=[], max_lod_to_load=None, lm_skip_lod0_only=True,
-               config=None, config_file='', reporter=DEFAULT_REPORTER):
+               mod_dirs=None, max_lod_to_load=None, lm_skip_lod0_only=True,
+               config=None, config_file='', reporter=DEFAULT_REPORTER,
+               load_roads=False, load_all_heightmaps=False,
+               load_water=False, visual_lighting=False,
+               prepare_lightmaps=True):
 
     engine = BF2Engine()
 
     level_dir = level_dir.rstrip('/').rstrip('\\')
     mod_dir = path.normpath(path.join(level_dir, '..', '..'))
+    mod_dirs = list(mod_dirs or ())
+    if not any(
+        mod_dir.lower() == item.rstrip('/').rstrip('\\').lower()
+        for item in mod_dirs
+    ):
+        mod_dirs.append(mod_dir)
+
+    has_level_archives = all(
+        path.isfile(path.join(level_dir, archive))
+        for archive in ('client.zip', 'server.zip')
+    )
+    if load_unpacked is None:
+        load_unpacked = path.isfile(
+            path.join(level_dir, 'Heightdata.con')
+        )
+        if not load_unpacked and not has_level_archives:
+            raise ImportException(
+                f"Level '{level_dir}' has neither unpacked data nor "
+                "client.zip/server.zip"
+            )
+    elif not load_unpacked and not has_level_archives:
+        raise ImportException(
+            f"Packed level '{level_dir}' is missing client.zip or server.zip"
+        )
+
+    level_path = path.relpath(level_dir, mod_dir).replace('\\', '/')
 
     if config_file and path.isfile(config_file):
         config = _module_from_file(config_file)
@@ -804,29 +1062,32 @@ def load_level(context, level_dir, use_cache=True,
 
     main_console.report_cb = report_cb
 
-    # mount level archives
-    if not load_unpacked:
-        file_manager.mountArchive(path.join(level_dir, 'client.zip'), level_dir)
-        file_manager.mountArchive(path.join(level_dir, 'server.zip'), level_dir)
-    else:
-        # add to to other mod dirs if needed
-        if not any([mod_dir.lower() == t.rstrip('/').rstrip('\\').lower() for t in mod_dirs]):
-            mod_dirs.append(mod_dir)
+    file_manager.root_dirs = mod_dirs
 
-        mod_dirs.append(level_dir) # for objects inside levels dir
-        engine.file_manager.root_dirs = mod_dirs
+    requires_object_templates = (
+        load_static_objects or load_overgrowth or load_roads
+    )
+    if not load_unpacked:
+        if requires_object_templates:
+            main_console.run_file('serverarchives.con')
+            mod_loader = ModLoader(mod_dir, use_cache, engine=engine)
+            if not mod_loader.load_cache():
+                mod_loader.load_objects()
+                mod_loader.write_cache()
+            main_console.run_file('clientarchives.con')
+
+        file_manager.mountArchive(
+            path.join(level_dir, 'server.zip'),
+            level_path,
+        )
+        file_manager.mountArchive(
+            path.join(level_dir, 'client.zip'),
+            level_path,
+        )
 
     # load statics & OG
-    if load_static_objects or load_overgrowth:
-        # load mapside object templates if exist
-        if not load_unpacked:
-            try:
-                main_console.run_file(path.join(level_dir, 'serverarchives.con'))
-                mod_loader = ModLoader(mod_dir, use_cache, engine=engine) # load just the main mod (ignore mod_dirs)
-                mod_loader.reload_all()
-            except FileManagerFileNotFound:
-                pass
-        else:
+    if requires_object_templates:
+        if load_unpacked:
             # load each mod_dir configured
             for md in mod_dirs:
                 print(f'Loading objects from "{md}"')
@@ -834,23 +1095,53 @@ def load_level(context, level_dir, use_cache=True,
             _run_all_con_files(os.path.join(level_dir, 'objects'), engine)
 
         if load_static_objects:
-            main_console.run_file(path.join(level_dir, 'StaticObjects.con'))
+            main_console.run_file(path.join(level_path, 'StaticObjects.con'))
 
         if load_overgrowth:
-            main_console.run_file(path.join(level_dir, 'Overgrowth', 'OvergrowthCollision.con'))
+            try:
+                main_console.run_file(
+                    path.join(
+                        level_path,
+                        'Overgrowth',
+                        'OvergrowthCollision.con',
+                    )
+                )
+            except FileManagerFileNotFound:
+                reporter.warning(
+                    f"Level '{level_path}' has no overgrowth collision data"
+                )
+
+    road_objects = []
+    if load_roads:
+        previous_object_count = len(engine.get_manager(Object).objects)
+        try:
+            main_console.run_file(
+                path.join(level_path, 'CompiledRoads.con')
+            )
+            road_objects = engine.get_manager(Object).objects[
+                previous_object_count:
+            ]
+        except FileManagerFileNotFound:
+            reporter.warning(
+                f"Level '{level_path}' has no CompiledRoads.con"
+            )
 
     # collect template configs recursively
     templates : Dict[str, ObjectTemplateConfig] = dict()
     for obj in engine.get_manager(Object).objects:
+        if obj.geometry_file:
+            continue
         _get_template_configs(obj.template, _get_obj_matrix(obj), config, templates, reporter, engine)
 
-    # load meshes
-    if not load_unpacked:
-        main_console.run_file('clientarchives.con')
+    def texture_data_loader(texture_file):
         try:
-            main_console.run_file(path.join(level_dir, 'clientarchives.con'))
+            return file_manager.readFile(texture_file)
         except FileManagerFileNotFound:
-            pass
+            return None
+
+    archive_texture_loader = (
+        texture_data_loader if not load_unpacked else None
+    )
 
     lm_keys = set()
     geom_template_to_mesh : Dict[str, GeometryTemplateConfig] = dict() # differen ObjectTemplates may use same GeometryTemplate
@@ -893,11 +1184,10 @@ def load_level(context, level_dir, use_cache=True,
             if max_lod_to_load is not None:
                 bf2_mesh.geoms[0].lods = bf2_mesh.geoms[0].lods[0:max_lod_to_load+1]
 
-            if not load_unpacked:
-                raise NotImplementedError() # TODO: texture load from FileManager
-
             importer = MeshImporter(context, geom_temp.location, loader=lambda: bf2_mesh,
-                                    texture_paths=mod_dirs, reporter=reporter, silent=True)
+                                    texture_paths=mod_dirs, reporter=reporter,
+                                    silent=True,
+                                    texture_data_loader=archive_texture_loader)
             try:
                 mesh_obj = importer.import_mesh()
             except ImportException as e:
@@ -932,7 +1222,16 @@ def load_level(context, level_dir, use_cache=True,
                                 with open(fname, "rb") as f:
                                     lm_size = BF2Samples.read_map_size_from(f)
                         else:
-                            raise NotImplementedError() # TODO
+                            try:
+                                samples = file_manager.readFile(
+                                    fname,
+                                    as_stream=True,
+                                )
+                                lm_size = BF2Samples.read_map_size_from(
+                                    samples
+                                )
+                            except FileManagerFileNotFound:
+                                pass
 
                     if lm_size is None:
                         if lod0_lm_size is not None:
@@ -964,7 +1263,15 @@ def load_level(context, level_dir, use_cache=True,
 
             # do material tweaks
             if 'StaticMesh' == geom_temp.geometry_type:
-                _do_material_tweaks(config, geom_temp.name, geoms[0], mod_dirs, ray_vis_mask, reporter) # TODO: Geom1 support
+                _do_material_tweaks(
+                    config,
+                    geom_temp.name,
+                    geoms[0],
+                    mod_dirs,
+                    ray_vis_mask,
+                    reporter,
+                    texture_data_loader=archive_texture_loader,
+                ) # TODO: Geom1 support
 
             # delete source objects, keep mesh instances
             delete_object(mesh_obj, remove_data=False)
@@ -978,6 +1285,7 @@ def load_level(context, level_dir, use_cache=True,
 
     total_template_count = len(imported_templates)
     current_template_index = 0
+    imported_instance_count = 0
     for imported_template in imported_templates:
         current_template_index += 1
 
@@ -997,6 +1305,7 @@ def load_level(context, level_dir, use_cache=True,
             # XXX: objects are be named by ObjectTemplate and meshes are named by GeometryTemplate which is not always the same!
             obj = mesh_info.instantiate(collection, temp_cfg.template.name, lod0_only=lod0_only)
             obj.matrix_world = matrix_world
+            imported_instance_count += 1
 
             # check LM key collisions
             if not skip_lightmaps:
@@ -1005,14 +1314,45 @@ def load_level(context, level_dir, use_cache=True,
                     reporter.warning(f"Object '{obj.name}' is too close to another which will result in both having the same lightmap filenames!")
                 lm_keys.add(lm_key)
 
+    imported_roads = []
+    if road_objects:
+        roads = _make_collection(context, 'Roads')
+        imported_roads = import_compiled_roads(
+            context,
+            road_objects,
+            file_manager,
+            roads,
+            _get_obj_matrix,
+            texture_paths=mod_dirs,
+            texture_data_loader=archive_texture_loader,
+            reporter=reporter,
+        )
+
+    if load_water:
+        try:
+            main_console.run_file(path.join(level_path, 'Water.con'))
+        except FileManagerFileNotFound:
+            reporter.warning(f"Level '{level_path}' has no Water.con")
+
+    terrain_result = None
     if load_heightmap:
-        _load_heightmap(context, level_dir, engine)
+        terrain_result = _load_heightmap(
+            context,
+            level_path,
+            engine,
+            load_all=load_all_heightmaps,
+            create_water=load_water,
+            prepare_lightmaps=prepare_lightmaps,
+            texture_paths=mod_dirs,
+            texture_data_loader=archive_texture_loader,
+            reporter=reporter,
+        )
 
     if load_lights:
         lights = _make_collection(context, "Lights")
 
         # sun (green channel)
-        main_console.run_file(path.join(level_dir, 'Sky.con'))
+        main_console.run_file(path.join(level_path, 'Sky.con'))
         sun_dir = Vector(engine.light_manager.sun_dir)
         conv_pos(sun_dir)
         sun_light = bpy.data.lights.new(name='Sun', type='SUN')
@@ -1024,16 +1364,42 @@ def load_level(context, level_dir, use_cache=True,
 
         sin_alpha = abs(sun_dir.z)
         sun_light.energy = (1 + 0.5 * sin_alpha) * 4 # TODO strength
-        sun_light.color = (0, 1, 0)
+        if visual_lighting:
+            sun_light.color = _normalized_color(
+                engine.light_manager.sun_color
+            )
+            if not engine.light_manager.sun_enabled:
+                sun_light.energy = 0
+        else:
+            sun_light.color = (0, 1, 0)
 
         # skylight / soft shadows (blue channel)
         if "SkyLight" in bpy.data.worlds:
             world = bpy.data.worlds["SkyLight"]
             bpy.data.worlds.remove(world)
         context.scene.world = bpy.data.worlds.new("SkyLight")
+        context.scene.world.use_nodes = True
         background = context.scene.world.node_tree.nodes["Background"]
-        background.inputs['Color'].default_value = (0, 0, 1, 1)
-        background.inputs['Strength'].default_value = 1.4 # TODO strength
+        if visual_lighting:
+            sky_color = _normalized_color(
+                engine.light_manager.sky_color
+            )
+            ambient_color = _normalized_color(
+                engine.light_manager.ambient_color
+            )
+            background.inputs['Color'].default_value = (
+                *((
+                    sky_component + ambient_component
+                ) * 0.5 for sky_component, ambient_component in zip(
+                    sky_color,
+                    ambient_color,
+                )),
+                1,
+            )
+            background.inputs['Strength'].default_value = 0.8
+        else:
+            background.inputs['Color'].default_value = (0, 0, 1, 1)
+            background.inputs['Strength'].default_value = 1.4 # TODO strength
 
         COLOR_MAP = {'red': (1, 0, 0), 'green': (0, 1, 0), 'blue': (0, 0, 1)}
 
@@ -1054,3 +1420,20 @@ def load_level(context, level_dir, use_cache=True,
                 obj = bpy.data.objects.new(point_light.name, point_light)
                 lights.objects.link(obj)
                 obj.matrix_world = matrix_world @ om
+
+    terrain_count = len(terrain_result[0]) if terrain_result else 0
+    level_name = path.basename(level_dir)
+    context.scene['bf2_level_name'] = level_name
+    context.scene['bf2_level_path'] = level_dir
+    context.scene['bf2_level_packed'] = not load_unpacked
+    context.scene['bf2_level_object_count'] = imported_instance_count
+    context.scene['bf2_level_road_count'] = len(imported_roads)
+    context.scene['bf2_level_terrain_count'] = terrain_count
+    return {
+        'level_name': level_name,
+        'packed': not load_unpacked,
+        'objects': imported_instance_count,
+        'roads': len(imported_roads),
+        'terrain_clusters': terrain_count,
+        'water': bool(terrain_result and terrain_result[1]),
+    }

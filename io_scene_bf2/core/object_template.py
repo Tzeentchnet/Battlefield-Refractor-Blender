@@ -31,6 +31,7 @@ from .import_settings import (
     IMPORT_MODE_HIDDEN,
     IMPORT_MODE_OFF,
     IMPORT_MODE_ON,
+    select_primary_index,
     validate_import_mode,
 )
 
@@ -127,6 +128,17 @@ def import_object_template(context, con_filepath, import_collmesh=None,
                             lod_mode=lod_mode,
                             damage_state_mode=damage_state_mode,
                             **kwargs)
+    if geometry_type == 'BundledMesh':
+        primary_geom_index = _select_primary_geom_index(
+            root_template,
+            importer.load_mesh(),
+        )
+        importer.primary_geom_index = primary_geom_index
+        if primary_geom_index:
+            reporter.info(
+                f"{root_template.name}: selected Geom{primary_geom_index} "
+                "as the primary state from ObjectTemplate geometry parts"
+            )
 
     root_geometry_obj = importer.import_mesh(name=root_template.name)
     root_geometry_obj.name = f'{geometry_type}_{root_template.name}'
@@ -168,7 +180,10 @@ def import_object_template(context, con_filepath, import_collmesh=None,
             )
             new_lod.parent = geom_obj
             _fix_unassigned_parts(geom_obj, new_lod, geom_parts)
+            new_lod_name = new_lod.name
             _delete_hierarchy_if_has_no_meshes(new_lod)
+            if new_lod_name not in bpy.data.objects:
+                continue
             _cleanup_unused_materials(new_lod)
             if weld_verts:
                 remove_double_verts(new_lod, recursive=True)
@@ -179,6 +194,7 @@ def import_object_template(context, con_filepath, import_collmesh=None,
         root_template.name,
         lod_mode=lod_mode,
         damage_state_mode=damage_state_mode,
+        primary_geom_index=importer.primary_geom_index,
         skip_subtree=_is_colmesh_dummy
         if collision_mesh_mode == IMPORT_MODE_HIDDEN
         else None,
@@ -211,6 +227,30 @@ def import_object_template(context, con_filepath, import_collmesh=None,
                 move_object_to_collection(occluder_obj, occluder_collection)
 
     return root_geometry_obj
+
+
+def _select_primary_geom_index(root_template, bf2_mesh):
+    required_parts = set()
+
+    def collect_required_parts(obj_template):
+        if obj_template.geom_part > 0:
+            required_parts.add(obj_template.geom_part)
+        for child in obj_template.children:
+            collect_required_parts(child.template)
+
+    collect_required_parts(root_template)
+    candidate_parts = []
+    for geom in bf2_mesh.geoms:
+        parts = set()
+        if geom.lods:
+            for material in geom.lods[0].materials:
+                parts.update(
+                    vertex.blendindices[0]
+                    for vertex in material.vertices
+                    if vertex.blendindices
+                )
+        candidate_parts.append(parts)
+    return select_primary_index(required_parts, candidate_parts)
 
 
 def _find_companion_occluder(con_filepath, object_template_name):
@@ -265,12 +305,18 @@ def _delete_hierarchy_if_has_no_meshes(obj, parent_bones=None):
 def _fix_unassigned_parts(geom_obj, lod_obj, geom_parts):
     # parts unassigned to any object template (e.g. GenericFirearm) 
     # will be left with geom as parent
+    name_to_part_id = {
+        obj.name: int(vg.removeprefix('mesh')) - 1
+        for vg, obj in geom_parts.items()
+    }
     uassigned = list()
     for child in geom_obj.children:
-        if child.name.startswith(lod_obj.name) and child.name != lod_obj.name:
+        if (
+            child.name.startswith(lod_obj.name)
+            and child.name != lod_obj.name
+            and child.name in name_to_part_id
+        ):
             uassigned.append(child)
-
-    name_to_part_id = {obj.name: int(vg.removeprefix('mesh')) - 1 for vg, obj in geom_parts.items()}
 
     # sort by the order of geometry part indexes so they are added to LOd in order
     uassigned.sort(key=lambda o: name_to_part_id[o.name])

@@ -1,4 +1,5 @@
 import bpy # type: ignore
+import hashlib
 import os
 from collections import OrderedDict
 
@@ -307,7 +308,62 @@ def _set_alpha_channel_packed(texture_node): # need this to render properly with
     if texture_node.image:
         texture_node.image.alpha_mode = 'CHANNEL_PACKED'
 
-def setup_material(material, uvs=None, texture_paths=[], backface_cull=True, reporter=DEFAULT_REPORTER):
+def load_texture_image(texture_file, texture_paths=(), texture_data_loader=None):
+    for texture_path in texture_paths:
+        absolute_path = os.path.join(texture_path, texture_file)
+        if os.path.isfile(absolute_path):
+            return bpy.data.images.load(absolute_path, check_existing=True)
+
+    if texture_data_loader is None:
+        return None
+
+    resource_path = texture_file.replace('\\', '/').lower()
+    for image in bpy.data.images:
+        if image.get('bf2_resource_path') == resource_path:
+            return image
+
+    data = texture_data_loader(texture_file)
+    if data is None:
+        return None
+
+    cache_dir = get_texture_cache_dir()
+    os.makedirs(cache_dir, exist_ok=True)
+    suffix = os.path.splitext(texture_file)[1] or '.dds'
+    digest = hashlib.sha256(data).hexdigest()[:20]
+    resource_name = os.path.basename(resource_path)
+    if not os.path.splitext(resource_name)[1]:
+        resource_name += suffix
+    cache_path = os.path.join(
+        cache_dir,
+        f'{digest}_{resource_name}',
+    )
+    if not os.path.isfile(cache_path):
+        with open(cache_path, 'wb') as cache_file:
+            cache_file.write(data)
+
+    image = bpy.data.images.load(cache_path, check_existing=True)
+    image.pack()
+    image.name = os.path.basename(resource_path)
+    image['bf2_resource_path'] = resource_path
+    image['bf2_resource_hash'] = digest
+    return image
+
+
+def get_texture_cache_dir():
+    cache_base = (
+        os.environ.get('LOCALAPPDATA')
+        or os.environ.get('XDG_CACHE_HOME')
+        or os.path.join(os.path.expanduser('~'), '.cache')
+    )
+    return os.path.join(
+        cache_base,
+        'Battlefield Refractor Blender',
+        'textures',
+    )
+
+
+def setup_material(material, uvs=None, texture_paths=[], backface_cull=True,
+                   reporter=DEFAULT_REPORTER, texture_data_loader=None):
     material.use_nodes = True
 
     node_tree = material.node_tree
@@ -410,23 +466,25 @@ def setup_material(material, uvs=None, texture_paths=[], backface_cull=True, rep
     # load textures
     texture_nodes = dict()
     for map_index, (texture_map_type, texture_map_file) in enumerate(texture_maps.items()):
-        if not texture_paths:
+        if not texture_paths and texture_data_loader is None:
             reporter.warning("MOD path is not defined in add-on preferences!")
-        for texture_path in texture_paths:
-            abs_path = os.path.join(texture_path, texture_map_file)
-            if os.path.isfile(abs_path):
-                break
-        else:
-            if texture_paths:
-                reporter.warning(f"Texture file '{texture_map_file}' not found in any of the texture paths")
-            abs_path = ''
+        image = load_texture_image(
+            texture_map_file,
+            texture_paths=texture_paths,
+            texture_data_loader=texture_data_loader,
+        )
+        if image is None and (texture_paths or texture_data_loader is not None):
+            reporter.warning(
+                f"Texture file '{texture_map_file}' not found in any of "
+                "the texture sources"
+            )
         tex_node = node_tree.nodes.new('ShaderNodeTexImage')
         tex_node.label = tex_node.name = texture_map_type
         tex_node.location = (-1 * NODE_WIDTH, -map_index * NODE_HEIGHT)
         tex_node.hide = True
         texture_nodes[texture_map_type] = tex_node
-        if abs_path:
-            tex_node.image = bpy.data.images.load(abs_path, check_existing=True)
+        if image:
+            tex_node.image = image
             tex_node.image.alpha_mode = 'NONE'
 
     shader_base_color = principled_BSDF.inputs['Base Color']

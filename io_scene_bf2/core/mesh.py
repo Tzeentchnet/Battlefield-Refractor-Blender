@@ -83,6 +83,7 @@ def organize_mesh_hierarchy(
     mesh_name,
     lod_mode=IMPORT_MODE_ON,
     damage_state_mode=IMPORT_MODE_ON,
+    primary_geom_index=0,
     skip_subtree=None,
 ):
     validate_import_mode(lod_mode, "LOD import mode")
@@ -100,6 +101,7 @@ def organize_mesh_hierarchy(
         hide_damage_state = should_hide_index(
             geom_index,
             damage_state_mode,
+            primary_geom_index,
         )
         if hide_damage_state:
             if damage_collection is None:
@@ -171,7 +173,8 @@ class MeshImporter:
                  texture_paths=[], geom_to_ske=None, merge_materials=True, free_normals=False,
                  load_backfaces=True, remove_loose_verts=True, loader=None, silent=False, reporter=DEFAULT_REPORTER,
                  keep_skeleton_pose=False, lod_mode=IMPORT_MODE_ON,
-                 damage_state_mode=IMPORT_MODE_ON):
+                 damage_state_mode=IMPORT_MODE_ON, primary_geom_index=0,
+                 texture_data_loader=None):
         self.context = context
         self.is_vegitation = 'vegitation' in mesh_file.lower() # yeah this is legit how BF2 detects it lmao
 
@@ -199,13 +202,26 @@ class MeshImporter:
             damage_state_mode,
             "damage state import mode",
         )
+        if primary_geom_index < 0:
+            raise ValueError("Primary Geom index cannot be negative")
+        self.primary_geom_index = primary_geom_index
+        self.texture_data_loader = texture_data_loader
+
+    def load_mesh(self):
+        if self.bf2_mesh is None:
+            try:
+                self.bf2_mesh = self._loader()
+            except BF2MeshException as e:
+                raise ImportException(str(e)) from e
+        return self.bf2_mesh
 
     def import_mesh(self, name='', geom=None, lod=None):
-        try:
-            self.bf2_mesh = self._loader()
-        except BF2MeshException as e:
-            raise ImportException(str(e)) from e
-
+        self.load_mesh()
+        if self.primary_geom_index >= len(self.bf2_mesh.geoms):
+            raise ImportException(
+                f"Primary Geom index {self.primary_geom_index} is out of range "
+                f"for '{self.bf2_mesh.name}'"
+            )
         self.mesh_name = name or self.bf2_mesh.name
         self._cleanup_old_materials()
         if geom is None and lod is None:
@@ -213,7 +229,11 @@ class MeshImporter:
             root_obj = bpy.data.objects.new(self.mesh_name, None)
             self.context.scene.collection.objects.link(root_obj)
             for geom_idx, bf2_geom in enumerate(self.bf2_mesh.geoms):
-                if not should_import_index(geom_idx, self.damage_state_mode):
+                if not should_import_index(
+                    geom_idx,
+                    self.damage_state_mode,
+                    self.primary_geom_index,
+                ):
                     continue
                 geom_name = self.build_mesh_prefix(geom_idx) + self.mesh_name
                 if self.reload: delete_object_if_exists(geom_name)
@@ -232,6 +252,7 @@ class MeshImporter:
                 self.mesh_name,
                 lod_mode=self.lod_mode,
                 damage_state_mode=self.damage_state_mode,
+                primary_geom_index=self.primary_geom_index,
             )
             return root_obj
         else:
@@ -368,7 +389,13 @@ class MeshImporter:
                     material.is_bf2_vegitation = self.is_vegitation
 
                 material.is_bf2_material = True # MUST be set last!
-                setup_material(material, uvs=uvs.keys(), texture_paths=self.texture_paths, reporter=self.reporter)
+                setup_material(
+                    material,
+                    uvs=uvs.keys(),
+                    texture_paths=self.texture_paths,
+                    reporter=self.reporter,
+                    texture_data_loader=self.texture_data_loader,
+                )
 
                 # BaseNDetail workaround
                 if is_basendetail:

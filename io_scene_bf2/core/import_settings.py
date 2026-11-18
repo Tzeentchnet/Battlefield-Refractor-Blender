@@ -23,15 +23,31 @@ def validate_import_mode(mode, setting_name="import mode"):
     return mode
 
 
-def should_import_index(index, mode):
+def should_import_index(index, mode, primary_index=0):
     if index < 0:
         raise ValueError("Import index cannot be negative")
+    if primary_index < 0:
+        raise ValueError("Primary import index cannot be negative")
     validate_import_mode(mode)
-    return index == 0 or mode != IMPORT_MODE_OFF
+    return index == primary_index or mode != IMPORT_MODE_OFF
 
 
-def should_hide_index(index, mode):
+def should_hide_index(index, mode, primary_index=0):
     if index < 0:
         raise ValueError("Import index cannot be negative")
+    if primary_index < 0:
+        raise ValueError("Primary import index cannot be negative")
     validate_import_mode(mode)
-    return index > 0 and mode == IMPORT_MODE_HIDDEN
+    return index != primary_index and mode == IMPORT_MODE_HIDDEN
+
+
+def select_primary_index(required_parts, candidate_parts):
+    if not candidate_parts:
+        raise ValueError("At least one import candidate is required")
+    required_parts = frozenset(required_parts)
+    if not required_parts:
+        return 0
+    return max(
+        range(len(candidate_parts)),
+        key=lambda index: len(required_parts.intersection(candidate_parts[index])),
+    )

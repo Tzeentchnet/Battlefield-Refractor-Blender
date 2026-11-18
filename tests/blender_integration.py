@@ -1,10 +1,13 @@
 import argparse
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import tempfile
+import struct
 
 import bpy
+from mathutils import Matrix
 import numpy as np
 
 
@@ -13,6 +16,11 @@ sys.path.insert(0, str(REPOSITORY_ROOT))
 
 import io_scene_bf2
 from io_scene_bf2.core.collision_mesh import import_collisionmesh
+from io_scene_bf2.core.bf2.bf2_engine import BF2Engine
+from io_scene_bf2.core.bf2.bf2_terrain import (
+    BF2Terrain,
+    BF2TerrainMaterial,
+)
 from io_scene_bf2.core.heightmap import import_heightmap_from
 from io_scene_bf2.core.import_settings import IMPORT_MODE_HIDDEN, IMPORT_MODE_OFF
 from io_scene_bf2.core.mesh import (
@@ -28,10 +36,16 @@ from io_scene_bf2.core.object_template import (
     OCCLUDER_COLLECTION_SUFFIX,
     import_object_template,
 )
+from io_scene_bf2.core.road import import_compiled_roads
+from io_scene_bf2.core.terrain import make_primary_terrain_material
 from io_scene_bf2.core.utils import convert_to_dds, save_img_as_dds
 from io_scene_bf2.core.utils.image import array_to_image, image_to_array
 from io_scene_bf2.core.utils.mesh import set_mesh_geometry
+from io_scene_bf2.core.tools.lightmapping.scene import (
+    SECONDARY_TERRAIN_COLORMAP_INDEX,
+)
 from io_scene_bf2.directx.dds import DDSHeader
+from io_scene_bf2.directx.dds_encoder import save_dds
 from io_scene_bf2.operators.ops_prefs import BF2AddonPreferences
 
 
@@ -42,6 +56,221 @@ def _make_test_pixels():
     pixels[4:, :4] = (0.0, 0.0, 1.0, 0.4)
     pixels[4:, 4:] = (1.0, 1.0, 1.0, 0.8)
     return pixels
+
+
+def _road_bytes():
+    data = bytearray()
+    data.extend(struct.pack("<HH", 4, 1))
+    data.extend(struct.pack("<3f", 0.0, 0.0, 0.0))
+    data.extend(struct.pack("<f", 1.0))
+    data.extend(struct.pack("<3f", 0.0, 0.0, 0.0))
+    data.extend(struct.pack("<3f", 1.0, 1.0, 0.0))
+    data.extend(struct.pack("<iI", 0, 3))
+    data.extend(
+        np.asarray(
+            (
+                (0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.2, 0.5),
+                (1.0, 0.0, 0.0, 1.0, 0.0, 1.1, 0.2, 0.75),
+                (0.0, 1.0, 0.0, 0.0, 1.0, 0.1, 1.2, 1.0),
+            ),
+            dtype="<f4",
+        ).tobytes()
+    )
+    data.extend(struct.pack("<I3H", 3, 0, 1, 2))
+    data.extend(struct.pack("<I", 0))
+    return bytes(data)
+
+
+class _MemoryFileManager:
+    def __init__(self, files):
+        self.files = {
+            name.replace("\\", "/").lower(): data
+            for name, data in files.items()
+        }
+
+    def readFile(self, filename, as_stream=False):
+        data = self.files[filename.replace("\\", "/").lower()]
+        return BytesIO(data) if as_stream else data
+
+
+def _assert_road_import(temporary_dir, pixels):
+    for name in ("primary", "secondary"):
+        save_dds(
+            str(Path(temporary_dir) / f"{name}.dds"),
+            pixels,
+            compression="DXT5",
+        )
+    material_data = (
+        b"primary\nsecondary\n"
+        + struct.pack("<3fI", 0.85, 200.0, 300.0, 1)
+    )
+    file_manager = _MemoryFileManager(
+        {
+            "Levels/Test/Roads/test.mesh": _road_bytes(),
+            "objects/roads/splines/highway_compiled.dat": material_data,
+        }
+    )
+    road_object = SimpleNamespace(
+        geometry_file="Levels/Test/Roads/test.mesh",
+        template=SimpleNamespace(
+            location="objects/roads/splines/highway.con",
+            geom="highway",
+            name="highway",
+        ),
+    )
+    collection = bpy.data.collections.new("RoadIntegration")
+    bpy.context.scene.collection.children.link(collection)
+    roads = import_compiled_roads(
+        bpy.context,
+        (road_object,),
+        file_manager,
+        collection,
+        lambda _road: Matrix.Identity(4),
+        texture_paths=(temporary_dir,),
+    )
+    if len(roads) != 1:
+        raise AssertionError("Synthetic compiled road was not imported")
+    road = roads[0]
+    if not np.allclose(
+        [vertex.co.z for vertex in road.data.vertices],
+        (0.01, 0.01, 1.01),
+    ):
+        raise AssertionError("Compiled road did not receive the 1 cm lift")
+    if road.get("bf2_vertical_offset") != 0.01:
+        raise AssertionError("Compiled road offset metadata is missing")
+
+    material = road.data.materials[0]
+    if material.surface_render_method != "BLENDED":
+        raise AssertionError("Compiled road is not using alpha blending")
+    texture_nodes = {
+        node.image.name: node
+        for node in material.node_tree.nodes
+        if node.type == "TEX_IMAGE" and node.image
+    }
+    primary = texture_nodes["primary.dds"]
+    secondary = texture_nodes["secondary.dds"]
+    mix = next(
+        node for node in material.node_tree.nodes
+        if node.bl_idname == "ShaderNodeMixRGB"
+    )
+    color_sources = {
+        link.to_socket: link.from_node
+        for link in material.node_tree.links
+        if link.to_node == mix
+    }
+    if (
+        color_sources.get(mix.inputs[1]) != secondary
+        or color_sources.get(mix.inputs[2]) != primary
+    ):
+        raise AssertionError("Compiled road texture blend order is reversed")
+    if primary.image.alpha_mode != "STRAIGHT":
+        raise AssertionError("Compiled road primary alpha is disabled")
+    if not any(
+        node.bl_idname == "ShaderNodeVectorMath"
+        and node.operation == "SCALE"
+        and np.isclose(node.inputs["Scale"].default_value, 0.1)
+        for node in material.node_tree.nodes
+    ):
+        raise AssertionError("Compiled road secondary UV scale is missing")
+    if not any(
+        link.from_node == primary
+        and link.from_socket == primary.outputs["Alpha"]
+        for link in material.node_tree.links
+    ):
+        raise AssertionError("Compiled road primary texture alpha is unused")
+
+    bpy.data.objects.remove(road, do_unlink=True)
+    bpy.data.collections.remove(collection)
+
+
+def _assert_detailed_terrain_material(temporary_dir):
+    temporary_dir = Path(temporary_dir)
+    color = np.full((8, 8, 4), (0.4, 0.3, 0.2, 1.0), dtype=np.float32)
+    mask1 = np.zeros((4, 4, 4), dtype=np.float32)
+    mask1[:, :, 0] = 1.0
+    mask1[:, :, 3] = 1.0
+    mask2 = np.zeros((4, 4, 4), dtype=np.float32)
+    mask2[:, :, 3] = 1.0
+    detail = np.full((8, 8, 4), (0.6, 0.5, 0.4, 1.0), dtype=np.float32)
+    for filename, image in (
+        ("color_00x00.dds", color),
+        ("mask_00x00_1.dds", mask1),
+        ("mask_00x00_2.dds", mask2),
+        ("overview.dds", color),
+        ("detail.dds", detail),
+        ("detail_side.dds", detail),
+    ):
+        save_dds(
+            str(temporary_dir / filename),
+            image,
+            compression="NONE",
+        )
+
+    terrain = BF2Terrain(
+        version=0x1001A,
+        primary_world_scale=(2.0, 2.0, 0.1),
+        secondary_world_scale=(2.0, 2.0, 0.1),
+        lowest_height=0.0,
+        highest_height=100.0,
+        patch_size=4,
+        subdivide_patches=False,
+        patches_per_side=1,
+        patch_colormap_size=8,
+        low_detailmap_size=4,
+        colormap_base_name="color_",
+        detailmap_base_name="mask_",
+        low_detailmap_base_name="low_",
+        lightmap_base_name="light_",
+        far_side_tiling=(2.0, 2.0),
+        far_top_tiling_hi=4.0,
+        far_top_tiling_low=2.0,
+        far_y_offset=0.0,
+        sun_color=(1.0, 1.0, 1.0),
+        gi_color=(0.2, 0.2, 0.2),
+        water_color=(0.1, 0.2, 0.3),
+        materials=(
+            BF2TerrainMaterial(
+                texture="detail",
+                tri_planar=True,
+                side_tiling=(2.0, 4.0),
+                top_tiling=8.0,
+                y_offset=0.0,
+                environment_map=False,
+            ),
+        ),
+    )
+    material = make_primary_terrain_material(
+        "TerrainIntegration",
+        terrain,
+        str(temporary_dir / "overview.dds"),
+        texture_paths=(str(temporary_dir),),
+    )
+    if material is None:
+        raise AssertionError("Detailed terrain material was not created")
+    if material.get("bf2_terrain_version") != terrain.version:
+        raise AssertionError("Detailed terrain metadata is missing")
+    generated = [
+        node.image
+        for node in material.node_tree.nodes
+        if node.type == "TEX_IMAGE"
+        and node.image
+        and node.image.get("bf2_generated_texture")
+    ]
+    if len(generated) != 3 or not all(
+        image.packed_file is not None for image in generated
+    ):
+        raise AssertionError("Generated terrain atlases are not packed")
+    if not any(
+        image.colorspace_settings.name == "Non-Color"
+        and image.get("bf2_generated_texture", "").endswith(("Mask1", "Mask2"))
+        for image in generated
+    ):
+        raise AssertionError("Terrain material masks are not non-color data")
+    if not any(
+        node.type == "NEW_GEOMETRY"
+        for node in material.node_tree.nodes
+    ):
+        raise AssertionError("Tri-planar terrain projection is missing")
 
 
 def _assert_roundtrip(source, loaded, compression):
@@ -87,6 +316,70 @@ def _assert_import_preferences():
     )
     if modes != (IMPORT_MODE_OFF,) * 4:
         raise AssertionError(f"Unexpected import preference defaults: {modes}")
+
+
+def _assert_terrain_settings():
+    engine = BF2Engine()
+    commands = (
+        "Terrain.patchSize 128",
+        "Terrain.subdividePatches 1",
+        "Terrain.primaryWorldScale 2/0.00457764/2",
+        "Terrain.secondaryWorldScale 4/1.17188/4",
+        "Terrain.patchColormapSize 512",
+        "Terrain.lowDetailmapSize 512",
+        "Terrain.detailmapBaseName Levels/Test/Detailmaps/tx",
+        "Terrain.lowDetailmapBaseName Levels/Test/LowDetailmaps/tx",
+        "Terrain.colormapBaseName Levels/Test/Colormaps/tx",
+        "Terrain.lightmapBaseName Levels/Test/Lightmaps/tx",
+        "Terrain.farSideTiling 5/5",
+        "Terrain.farTopTilingHi 24",
+        "Terrain.farTopTilingLow 4",
+        "Terrain.farYOffset 0",
+        "Terrain.init",
+    )
+    for command in commands:
+        engine.main_console.exec(command)
+
+    terrain = engine.terrain_settings
+    if (
+        terrain.patch_size,
+        terrain.subdivide_patches,
+        terrain.primary_world_scale,
+        terrain.secondary_world_scale,
+        terrain.patch_colormap_size,
+        terrain.low_detailmap_size,
+        terrain.colormap_base_name,
+        terrain.far_side_tiling,
+        terrain.far_top_tiling_hi,
+        terrain.far_top_tiling_low,
+        terrain.far_y_offset,
+    ) != (
+        128,
+        True,
+        (2.0, 0.00457764, 2.0),
+        (4.0, 1.17188, 4.0),
+        512,
+        512,
+        "Levels/Test/Colormaps/tx",
+        (5.0, 5.0),
+        24.0,
+        4.0,
+        0.0,
+    ):
+        raise AssertionError("Terrain.con settings were not parsed correctly")
+
+    expected_colormaps = {
+        (-1, -1): 0,
+        (0, -1): 1,
+        (1, -1): 2,
+        (-1, 0): 3,
+        (1, 0): 4,
+        (-1, 1): 5,
+        (0, 1): 6,
+        (1, 1): 7,
+    }
+    if SECONDARY_TERRAIN_COLORMAP_INDEX != expected_colormaps:
+        raise AssertionError("Secondary-terrain colormap ordering changed")
 
 
 def _assert_hidden_import_collections(context):
@@ -206,6 +499,7 @@ def main():
     io_scene_bf2.register()
     try:
         _assert_import_preferences()
+        _assert_terrain_settings()
         _assert_hidden_import_collections(bpy.context)
 
         mesh = bpy.data.meshes.new("BatchGeometryIntegration")
@@ -235,6 +529,16 @@ def main():
             len(heightmap.data.uv_layers["UVMap"].data),
         ) != (16, 18, 54):
             raise AssertionError("NumPy heightmap import returned unexpected geometry")
+        if [
+            tuple(polygon.vertices)
+            for polygon in heightmap.data.polygons[:4]
+        ] != [
+            (1, 0, 4),
+            (5, 1, 4),
+            (5, 4, 8),
+            (9, 5, 8),
+        ]:
+            raise AssertionError("Heightmap does not use BF2's fixed diagonal")
         bpy.data.objects.remove(heightmap, do_unlink=True)
 
         source = _make_test_pixels()
@@ -242,6 +546,8 @@ def main():
         array_to_image(image, source)
 
         with tempfile.TemporaryDirectory() as temporary_dir:
+            _assert_road_import(temporary_dir, source)
+            _assert_detailed_terrain_material(temporary_dir)
             for compression in ("NONE", "DXT1", "DXT3", "DXT5"):
                 filepath = Path(temporary_dir) / f"roundtrip_{compression}.dds"
                 save_img_as_dds(image, str(filepath), compression)

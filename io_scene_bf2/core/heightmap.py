@@ -71,19 +71,18 @@ def import_heightmap_from(context, data, name, bit_res=16, scale=(1, 1, 1)):
     grid_x = np.repeat(np.arange(world_dim - 1), world_dim - 1)
     grid_y = np.tile(np.arange(world_dim - 1), world_dim - 1)
     index = grid_y * world_dim + grid_x
-    alternate = (grid_y + grid_x) % bytes_per_heixel == 0
     faces = np.empty((len(index) * 2, 3), dtype=np.int32)
     faces[0::2] = np.column_stack(
         (
             index + 1,
             index,
-            np.where(alternate, index + world_dim + 1, index + world_dim),
+            index + world_dim,
         )
     )
     faces[1::2] = np.column_stack(
         (
             index + world_dim + 1,
-            np.where(alternate, index, index + 1),
+            index + 1,
             index + world_dim,
         )
     )

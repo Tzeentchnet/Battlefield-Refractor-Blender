@@ -7,8 +7,9 @@ from .bf2.bf2_engine import (BF2Engine,
                             CollisionMeshTemplate,
                             GeometryTemplate)
 
-CACHE_FILE_NAME = ".io_scene_bf2_cache"
-CACHE_VERSION = "1.0" # must be changed if anything within xxxTemplate data is added/modified
+CACHE_NAMESPACE = hashlib.sha256(__package__.encode('utf-8')).hexdigest()[:12]
+CACHE_FILE_NAME = f".io_scene_bf2_cache_{CACHE_NAMESPACE}"
+CACHE_VERSION = "1.1" # must be changed if anything within xxxTemplate data is added/modified
 
 class ModLoader:
     def __init__(self, mod_dir, use_cache=True, engine=None):
@@ -64,8 +65,21 @@ class ModLoader:
                 if CACHE_VERSION != version_num or md5hash != cache_md5:
                     os.remove(filepath)
                     continue
-                self.load_cache_from_file(filepath)
-                return True
+                try:
+                    self.load_cache_from_file(filepath)
+                    return True
+                except (
+                    AttributeError,
+                    EOFError,
+                    ImportError,
+                    ModuleNotFoundError,
+                    pickle.UnpicklingError,
+                ) as exc:
+                    print(
+                        f'Ignoring incompatible BF2 object cache '
+                        f'"{filepath}": {exc}'
+                    )
+                    os.remove(filepath)
         return False
     
     def object_archives_md5(self):

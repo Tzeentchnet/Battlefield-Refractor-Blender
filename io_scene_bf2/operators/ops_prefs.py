@@ -66,7 +66,7 @@ class BF2AddonPreferences(bpy.types.AddonPreferences):
     ) # type: ignore
     import_damage_states: EnumProperty(
         name="Import Damage States",
-        description="Default behavior for additional Geoms; Off imports only Geom0",
+        description="Default behavior for additional Geoms; Off imports only the primary state",
         items=IMPORT_MODE_ITEMS,
         default=IMPORT_MODE_OFF,
     ) # type: ignore

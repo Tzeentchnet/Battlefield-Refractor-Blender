@@ -483,6 +483,15 @@ class HeightmapClusterManager(Manager):
         return new_cluster
 
 
+class ObjectGeometry:
+    def __init__(self, owner):
+        self.owner = owner
+
+    @console_command
+    def loadMesh(self, mesh_file):
+        self.owner.geometry_file = mesh_file
+
+
 class Object:
     def __init__(self, template):
         self.template = template
@@ -492,6 +501,8 @@ class Object:
         self.transform = None
         self.light_source_mask = 0
         self._layer = 0
+        self.geometry_file = None
+        self.geometry = ObjectGeometry(self)
 
     @console_command
     def isOvergrowth(self, flag):
@@ -536,6 +547,8 @@ class Object:
             s += f'Object.isOvergrowth {int(self.is_overgrowth)}\n'
         if self.light_source_mask:
             s += f'Object.setLightSourceMask {self.light_source_mask}\n'
+        if self.geometry_file:
+            s += f'Object.geometry.loadMesh {self.geometry_file}\n'
         s += f'\n'
         return s
 
@@ -568,10 +581,195 @@ class LightManager():
 
     def __init__(self):
         self.sun_dir = (0, 0, 0)
+        self.sky_color = (0.5, 0.5, 0.5)
+        self.ambient_color = (0.5, 0.5, 0.5)
+        self.sun_color = (1, 1, 1)
+        self.sun_specular_color = (1, 1, 1)
+        self.sun_enabled = True
+
+    @console_command
+    def init(self):
+        pass
 
     @console_command
     def sunDirection(self, vec):
         self.sun_dir = _str_to_vec(vec, 3)
+
+    @console_command
+    def skyColor(self, vec):
+        self.sky_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def ambientColor(self, vec):
+        self.ambient_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def sunColor(self, vec):
+        self.sun_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def sunSpecColor(self, vec):
+        self.sun_specular_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def enableSun(self, enabled):
+        self.sun_enabled = bool(int(enabled))
+
+
+class RendererSettings:
+    def __init__(self):
+        self.fog_color = (0, 0, 0)
+        self.fog_settings = (0, 0, 0, 0)
+        self.water_color = (0.1, 0.2, 0.3)
+        self.water_specular_color = (1, 1, 1, 1)
+        self.water_specular_power = 16.0
+        self.water_scroll = (0, 0)
+        self.water_animation_speed = 0.0
+        self.water_fog_color = (0, 0, 0)
+        self.water_fog_settings = (0, 0, 0, 0)
+
+    @console_command
+    def fogColor(self, vec):
+        self.fog_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def fogStartEndAndBase(self, vec):
+        self.fog_settings = _str_to_vec(vec, 4)
+
+    @console_command
+    def waterColor(self, vec):
+        self.water_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def waterSpecularColor(self, vec):
+        self.water_specular_color = _str_to_vec(vec, 4)
+
+    @console_command
+    def waterSpecularPower(self, value):
+        self.water_specular_power = float(value)
+
+    @console_command
+    def waterScroll(self, vec):
+        self.water_scroll = _str_to_vec(vec, 2)
+
+    @console_command
+    def waterAnimSpeed(self, value):
+        self.water_animation_speed = float(value)
+
+    @console_command
+    def waterFogColor(self, vec):
+        self.water_fog_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def waterFogStartEndAndBase(self, vec):
+        self.water_fog_settings = _str_to_vec(vec, 4)
+
+
+class TerrainSettings:
+    def __init__(self):
+        self.water_color = (0.1, 0.2, 0.3)
+        self.water_sun_intensity = 1.0
+        self.sun_color = (1, 1, 1)
+        self.gi_color = (0.5, 0.5, 0.5)
+        self.data_file = None
+        self.patch_size = None
+        self.subdivide_patches = None
+        self.primary_world_scale = None
+        self.secondary_world_scale = None
+        self.patch_colormap_size = None
+        self.low_detailmap_size = None
+        self.detailmap_base_name = None
+        self.low_detailmap_base_name = None
+        self.colormap_base_name = None
+        self.lightmap_base_name = None
+        self.far_side_tiling = None
+        self.far_top_tiling_hi = None
+        self.far_top_tiling_low = None
+        self.far_y_offset = None
+
+    @console_command
+    def create(self, _terrain_type):
+        pass
+
+    @console_command
+    def load(self, data_file):
+        self.data_file = data_file
+
+    @console_command
+    def patchSize(self, value):
+        self.patch_size = int(value)
+
+    @console_command
+    def subdividePatches(self, value):
+        self.subdivide_patches = bool(int(value))
+
+    @console_command
+    def primaryWorldScale(self, vec):
+        self.primary_world_scale = _str_to_vec(vec, 3)
+
+    @console_command
+    def secondaryWorldScale(self, vec):
+        self.secondary_world_scale = _str_to_vec(vec, 3)
+
+    @console_command
+    def patchColormapSize(self, value):
+        self.patch_colormap_size = int(value)
+
+    @console_command
+    def lowDetailmapSize(self, value):
+        self.low_detailmap_size = int(value)
+
+    @console_command
+    def detailmapBaseName(self, value):
+        self.detailmap_base_name = value
+
+    @console_command
+    def lowDetailmapBaseName(self, value):
+        self.low_detailmap_base_name = value
+
+    @console_command
+    def colormapBaseName(self, value):
+        self.colormap_base_name = value
+
+    @console_command
+    def lightmapBaseName(self, value):
+        self.lightmap_base_name = value
+
+    @console_command
+    def farSideTiling(self, vec):
+        self.far_side_tiling = _str_to_vec(vec, 2)
+
+    @console_command
+    def farTopTilingHi(self, value):
+        self.far_top_tiling_hi = float(value)
+
+    @console_command
+    def farTopTilingLow(self, value):
+        self.far_top_tiling_low = float(value)
+
+    @console_command
+    def farYOffset(self, value):
+        self.far_y_offset = float(value)
+
+    @console_command
+    def init(self):
+        pass
+
+    @console_command
+    def terrainWaterColor(self, vec):
+        self.water_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def waterSunIntensity(self, value):
+        self.water_sun_intensity = float(value)
+
+    @console_command
+    def sunColor(self, vec):
+        self.sun_color = _str_to_vec(vec, 3)
+
+    @console_command
+    def GIColor(self, vec):
+        self.gi_color = _str_to_vec(vec, 3)
 
 
 class Animation(Template):
@@ -623,6 +821,8 @@ class BF2Engine():
         self.glob_managers.append(AnimationManager(self))
         self.file_manager : FileManager = FileManager()
         self.light_manager : LightManager = LightManager()
+        self.renderer_settings = RendererSettings()
+        self.terrain_settings = TerrainSettings()
 
         self.main_console : MainConsole = MainConsole(self, silent=self.silent)
         self.main_console.register_object(self.get_manager(ObjectTemplate), 'ObjectTemplate')
@@ -636,6 +836,8 @@ class BF2Engine():
         self.main_console.register_object(animation_manager, 'animationManager')
         self.main_console.register_object(self.file_manager)
         self.main_console.register_object(self.light_manager)
+        self.main_console.register_object(self.renderer_settings, 'Renderer')
+        self.main_console.register_object(self.terrain_settings, 'Terrain')
 
     def _get_manager(self, manager, _type):
         if not isinstance(manager, Manager):

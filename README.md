@@ -1,4 +1,4 @@
-# Battlefield 2 Blender Add-on
+# Battlefield Refractor Blender
 
 A Blender 5.2+ toolset for importing, editing, and exporting assets used by
 Battlefield 2 and other games built on DICE's Refractor 2 engine.
@@ -27,6 +27,7 @@ time it was forked. Upstream may continue to change independently.
 | Rectangle packing | Vendored `rectpack` package | In-house deterministic MaxRects packer with multi-bin and power-of-two atlas support |
 | Distribution | Separate platform packages containing native libraries | One platform-independent add-on package |
 | Import defaults | Full mesh hierarchies and referenced collision data imported by default | Optional collision meshes, occluders, LODs, and damage states default to Off, with On and Hidden collection modes |
+| Level loading | Experimental unpacked, lightmapping-oriented scene setup | Direct packed or unpacked visual map import with static objects, overgrowth, detailed primary terrain, all terrain clusters, compiled roads, water, and lighting |
 
 The Texconv Git submodule, native binaries, binary dependency licenses, and
 vendored `rectpack` source have been removed.
@@ -35,7 +36,7 @@ vendored `rectpack` source have been removed.
 
 - Blender 5.2 LTS or newer.
 - Battlefield 2 or another compatible Refractor 2 asset set.
-- Extracted mod archives when resolving related object and texture paths.
+- A configured mod directory when resolving related objects and textures.
 
 NumPy is included with Blender 5.2; no separate Python environment or package
 installation is required.
@@ -55,7 +56,8 @@ installation is required.
 ### Authoring tools
 
 - ObjectTemplate import and export
-- Level import and lightmap baking
+- Packed and unpacked visual level import
+- Level-aware lightmap baking
 - Skeleton rigging and animation utilities
 - StaticMesh and Overgrowth LOD generation
 - SkinnedMesh and BundledMesh skinning
@@ -63,19 +65,76 @@ installation is required.
 - DXT1, DXT3, DXT5, and uncompressed DDS export
 - Batched lightmap baking and atlas generation
 
-See the [full user documentation](docs/README.md) and
-[Battlefield 2 glossary](docs/BF2.md) for workflow details.
+See the [full user documentation](docs/README.md),
+[level and map import guide](docs/MAP_IMPORT.md),
+[Battlefield 2 glossary](docs/BF2.md), and
+[Refractor 2 file format reference](docs/FILE_FORMATS.md) for workflow and
+tool-development details.
+
+## Retail asset examples
+
+These Blender 5.2 renders were produced through the add-on's public import
+operators from retail Battlefield 2 assets:
+
+<table>
+  <tr>
+    <th>Weapon: USRIF M16A2</th>
+    <th>Character: US light soldier</th>
+  </tr>
+  <tr>
+    <td>
+      <img
+        src="./docs/images/weapon-m16a2.png"
+        alt="Imported Battlefield 2 USRIF M16A2 weapon"
+        width="640">
+    </td>
+    <td>
+      <img
+        src="./docs/images/character-us-light-soldier.png"
+        alt="Imported Battlefield 2 US light soldier"
+        width="640">
+    </td>
+  </tr>
+  <tr>
+    <th>Prop: large trash dumpster</th>
+    <th>Vehicle: JEEP FAAV</th>
+  </tr>
+  <tr>
+    <td>
+      <img
+        src="./docs/images/prop-large-trash-dumpster.png"
+        alt="Imported Battlefield 2 large trash dumpster prop"
+        width="640">
+    </td>
+    <td>
+      <img
+        src="./docs/images/vehicle-jeep-faav.png"
+        alt="Imported Battlefield 2 JEEP FAAV with articulated wheel geometry"
+        width="640">
+    </td>
+  </tr>
+</table>
+
+The character example combines the third-person skeleton, skinned mesh, and
+`3p_runForward.baf` action:
+
+<p align="center">
+  <img
+    src="./docs/images/character-us-light-soldier-run.gif"
+    alt="Imported Battlefield 2 US light soldier playing the third-person run-forward animation"
+    width="480">
+</p>
 
 ## Installation
 
 ### Install a release
 
 1. Download an `io_scene_bf2-*.zip` package from this fork's
-   [Releases](https://github.com/Tzeentchnet/bf2-blender/releases).
+   [Releases](https://github.com/Tzeentchnet/Battlefield-Refractor-Blender/releases).
 2. Open Blender 5.2.
 3. Drag the ZIP onto Blender, or use
    `Edit > Preferences > Add-ons > Install from Disk`.
-4. Enable the **Battlefield 2** add-on if Blender does not enable it
+4. Enable the **Battlefield Refractor Blender** add-on if Blender does not enable it
    automatically.
 
 ### Build from source
@@ -94,12 +153,14 @@ Install the generated ZIP using the same steps as a release package.
 
 Before importing complete objects or levels:
 
-1. Open `Edit > Preferences > Add-ons > Battlefield 2 > Preferences`.
+1. Open `Edit > Preferences > Add-ons > Battlefield Refractor Blender > Preferences`.
 2. Add the path to each BF2 mod the add-on should search. For the base game,
    this is normally the `mods/bf2` directory.
-3. Extract each mod archive into its corresponding directory. For example,
-   extract `Objects_client.zip` and `Objects_server.zip` into `Objects`.
-4. Add dependency mods as additional search paths when necessary.
+3. Add dependency mods as additional search paths when necessary.
+
+The level importer reads retail `client.zip`, `server.zip`, and mod object
+archives directly. Extract archives only for workflows that select individual
+ObjectTemplate files and need neighboring files on disk.
 
 Raw mesh, skeleton, animation, collision, and occlusion files can also be
 imported individually from `File > Import > BF2` or by dragging supported files
@@ -114,7 +175,9 @@ The add-on preferences define the default handling for collision meshes,
 occluders, lower-detail LODs, and damage states. Each setting has three modes:
 
 - **Off** skips the optional data. For mesh hierarchies this imports only
-  Geom0 and LOD0.
+  the primary Geom and LOD0. Raw mesh imports use Geom0; ObjectTemplate
+  imports select the Geom that best covers the template's authored geometry
+  parts.
 - **On** preserves the previous behavior and imports the data normally.
 - **Hidden** imports the data into a dedicated collection with viewport and
   render visibility disabled.
@@ -122,6 +185,71 @@ occluders, lower-detail LODs, and damage states. Each setting has three modes:
 All four settings default to **Off**. Mesh and ObjectTemplate import dialogs
 provide per-import overrides initialized from these preferences. Explicitly
 selecting a raw `.collisionMesh` or `.occ` file always imports that file.
+
+## Full map import
+
+Use `File > Import > BF2 > Level / Map`, then select a level directory or its
+`client.zip`/`server.zip`. The importer auto-detects packed and unpacked maps.
+Its default visual import includes:
+
+- `StaticObjects.con` placements and bundled child objects;
+- overgrowth placements;
+- Geom0/LOD0 visible meshes with archive-backed DDS materials;
+- the detailed primary terrain and all eight surrounding heightmap clusters;
+- compiled road meshes with game-matched layering, UV, alpha, and fade behavior;
+- a map-wide water plane at the configured sea level; and
+- sun and world lighting derived from `Sky.con`.
+
+Imported archive textures are cached locally and packed into the Blender file.
+The map collections and scene carry `bf2_*` source metadata.
+
+The playable primary terrain combines its patch colormaps, two RGB material
+mask sets, and up to six tiled detail materials from `terraindata.raw`.
+Tri-planar rock layers use their side textures on slopes. Generated colormap
+and mask atlases are cached and packed into the `.blend`. Each surrounding
+tile uses its authored `Colormaps/tx_s#.dds` image, preserving the map-specific
+outer landscape instead of applying a generic fallback.
+
+### Retail map examples
+
+<table>
+  <tr>
+    <th>Strike at Karkand</th>
+    <th>Daqing Oilfields</th>
+  </tr>
+  <tr>
+    <td>
+      <img
+        src="./docs/images/strike-at-karkand-overview.png"
+        alt="Imported Strike at Karkand map with detailed primary and surrounding terrain"
+        width="640">
+    </td>
+    <td>
+      <img
+        src="./docs/images/daqing-oilfields-overview.png"
+        alt="Imported Daqing Oilfields map with detailed primary and surrounding terrain"
+        width="640">
+    </td>
+  </tr>
+</table>
+
+Karkand's `tarmac1_compiled` road demonstrates the reconstructed terrain
+detail layers, alpha-blended road edges, and corrected road-to-heightfield
+alignment:
+
+<p align="center">
+  <img
+    src="./docs/images/strike-at-karkand-tarmac1.png"
+    alt="Strike at Karkand tarmac1 compiled-road close-up"
+    width="960">
+</p>
+
+This is a complete **visual/editor scene** import, not a playable-level
+conversion. Gameplay logic, AI/navigation data, spawn logic, collision-only
+geometry, occluders, particle/effect systems, camera-distance terrain
+transitions, terrain environment maps, sky domes, and fog volumes are not
+recreated. See the
+[level and map import guide](docs/MAP_IMPORT.md) for details.
 
 ## DDS behavior
 
@@ -160,13 +288,14 @@ blender --command extension build --source-dir io_scene_bf2
 ```
 
 The integration test covers add-on registration, batched mesh creation,
-heightmap generation, DDS encoding, Blender-native DDS loading, and file-based
-DDS conversion. Optional arguments allow testing extracted Battlefield 2 DDS,
-StaticMesh, BundledMesh, CollisionMesh, and ObjectTemplate files.
+heightmap topology, compiled-road layering, detailed terrain atlas generation,
+DDS encoding, Blender-native DDS loading, and file-based DDS conversion.
+Optional arguments allow testing extracted Battlefield 2 DDS, StaticMesh,
+BundledMesh, CollisionMesh, and ObjectTemplate files.
 
 ## Project status and compatibility
 
-- Add-on version: `0.18.0`
+- Add-on version: `0.20.0`
 - Minimum Blender version: `5.2.0`
 - Package type: Blender extension
 - Native runtime dependencies: none

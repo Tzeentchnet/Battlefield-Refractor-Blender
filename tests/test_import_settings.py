@@ -33,6 +33,52 @@ class ImportSettingsTests(unittest.TestCase):
             import_settings.should_hide_index(3, import_settings.IMPORT_MODE_ON)
         )
 
+    def test_nonzero_primary_index(self):
+        self.assertTrue(
+            import_settings.should_import_index(
+                1,
+                import_settings.IMPORT_MODE_OFF,
+                primary_index=1,
+            )
+        )
+        self.assertFalse(
+            import_settings.should_import_index(
+                0,
+                import_settings.IMPORT_MODE_OFF,
+                primary_index=1,
+            )
+        )
+        self.assertFalse(
+            import_settings.should_hide_index(
+                1,
+                import_settings.IMPORT_MODE_HIDDEN,
+                primary_index=1,
+            )
+        )
+        self.assertTrue(
+            import_settings.should_hide_index(
+                0,
+                import_settings.IMPORT_MODE_HIDDEN,
+                primary_index=1,
+            )
+        )
+
+    def test_selects_first_geom_with_best_part_coverage(self):
+        self.assertEqual(
+            import_settings.select_primary_index(
+                {1, 2, 3},
+                ({0}, {0, 1, 2, 3}, {0, 1}),
+            ),
+            1,
+        )
+        self.assertEqual(
+            import_settings.select_primary_index(
+                {1},
+                ({0, 1}, {0, 1}),
+            ),
+            0,
+        )
+
     def test_hidden_imports_and_hides_secondary_indices(self):
         self.assertTrue(
             import_settings.should_import_index(

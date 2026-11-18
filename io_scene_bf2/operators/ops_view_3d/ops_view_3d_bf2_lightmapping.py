@@ -158,7 +158,10 @@ class VIEW3D_OT_bf2_new_lm_config(bpy.types.Operator):
 class VIEW3D_OT_bf2_load_level(bpy.types.Operator, ImportHelper):
     bl_idname = "bf2.load_level"
     bl_label = "Load level"
-    bl_description = "Import BF2 level (static objects, heightmap and lights), make sure your level files are unpacked"
+    bl_description = (
+        "Import a packed or unpacked BF2 level for lightmap baking "
+        "(static objects, primary heightmap, and lights)"
+    )
 
     load_static_objects: BoolProperty(
         name="Load Static Objects",
@@ -174,7 +177,10 @@ class VIEW3D_OT_bf2_load_level(bpy.types.Operator, ImportHelper):
 
     load_heightmap: BoolProperty(
         name="Load Heightmap",
-        description="Import primary heightmap and water plane defined in Heightdata.con",
+        description=(
+            "Import the primary heightmap from Heightdata.con and prepare "
+            "its water-depth baking modifier"
+        ),
         default=True
     ) # type: ignore
 
@@ -262,6 +268,7 @@ class VIEW3D_OT_bf2_load_level(bpy.types.Operator, ImportHelper):
 
         except Exception as e:
             self.report({"ERROR"}, traceback.format_exc())
+            return {'CANCELLED'}
         return {'FINISHED'}
 
     def invoke(self, context, event):

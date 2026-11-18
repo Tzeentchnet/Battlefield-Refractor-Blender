@@ -1,5 +1,7 @@
 
 # Table of Contents
+- [Refractor 2 file format reference](FILE_FORMATS.md)
+- [Level and map import guide](MAP_IMPORT.md)
 - [Before you start](#before-you-start)
 - [Initial Add-on setup](#initial-add-on-setup)
 - [Animating](#animating)
@@ -17,6 +19,7 @@
   * [Animated UVs (BundledMesh)](#animated-uvs-bundledmesh)
   * [Skinning (SkinnedMesh)](#skinning-skinnedmesh)
   * [Overgrowth LOD Generation](#overgrowth-lod-generation)
+- [Level and map import](#level-and-map-import)
 - [Lightmapping](#lightmapping)
 - [Video Tutorials](#video-tutorials)
 - [Scripting](#scripting)
@@ -24,10 +27,15 @@
 # Before you start.
 If you are completely unfamiliar with BF2 modding, consider reading [BF2 glossary](BF2.md) first, where you'll find explanations of BF2 specific terms and systems used throughout this documentation.
 
+Tool authors can use the
+[Refractor 2 file format reference](FILE_FORMATS.md) for the binary and text
+layouts implemented by this add-on.
+
 # Initial Add-on setup
 Before using the add-on you must do the following:
-- Configure path to your BF2 mod (`Edit -> Preferences -> Add-ons -> Battlefield 2 -> Preferences`). You may define multiple paths e.g. if your mod uses dependencies from the baseline game (`mods/bf2`)
-- Extract every `.zip` file from your mod directory into their respective folders (e.g. `objects_server.zip` and `objects_client.zip` must both be extracted to `objects` directory)
+- Configure path to your BF2 mod (`Edit -> Preferences -> Add-ons -> Battlefield Refractor Blender -> Preferences`). You may define multiple paths e.g. if your mod uses dependencies from the baseline game (`mods/bf2`)
+- Add dependency mod paths when the selected mod references baseline content.
+- Archive extraction is not required for level import. Extract archives into their corresponding folders only when an individual-file workflow needs neighboring ObjectTemplate, mesh, or texture files on disk.
 - **[Linux only]** To avoid issues on a case sensitive filesystem rename all extracted files to lower case:
     ```sh
     find $MOD_DIR -depth -exec rename 's/(.*)\/([^\/]*)/$1\/\L$2/' {} \;
@@ -42,7 +50,7 @@ The add-on preferences also define defaults for optional import data:
 | Import Collision Meshes | Skip CollisionMeshes referenced by ObjectTemplates | Import into the object hierarchy | Import into a dedicated hidden collection |
 | Import Occluders | Skip companion `.occ` files | Import companion `.occ` files | Import into a dedicated hidden collection |
 | Import LODs | Import only LOD0 | Import every LOD | Import LOD0 normally and place lower-detail LODs in a hidden collection |
-| Import Damage States | Import only Geom0 | Import every Geom | Import Geom0 normally and place additional Geoms in a hidden collection |
+| Import Damage States | Import only the primary Geom | Import every Geom | Import the primary Geom normally and place other Geoms in a hidden collection |
 
 All four preferences default to **Off**. Mesh and ObjectTemplate import dialogs
 can override them for one import. Explicitly importing a raw `.collisionMesh`
@@ -50,8 +58,11 @@ or `.occ` file always imports the selected file regardless of these defaults.
 
 Additional Geoms represent damage states for many static and vehicle assets,
 but some BF2 assets use Geoms for other variants such as first-person and
-third-person meshes. Use **On**, **Hidden**, or the single-LOD/Geom selector
-when those variants are required.
+third-person meshes. Raw mesh imports treat Geom0 as primary. ObjectTemplate
+imports instead select the first Geom with the best coverage of the
+ObjectTemplate's authored geometry parts, which handles vehicles whose Geom0
+is only a placeholder. Use **On**, **Hidden**, or the single-LOD/Geom selector
+when other variants are required.
 
 # Animating
 The add-on ships with extensive toolset for creating BF2 animations including batch import/export, automated scene setup & rigging and more. This section contains all the info you need to get started.
@@ -282,10 +293,52 @@ Bare in mind that to export properly, each vertex must have at most two weights 
 ## Overgrowth LOD Generation
 The add-on also ships with the OG LOD generation tool which can create a low quality OG mesh variant from the base mesh. The tool can be found under `Object` -> `BF2` submenu and its usage is quite straightforward. NOTE: You need to have the base OG imported as `ObjectTemplate (.con)`, not as `StaticMesh (.staticmesh)` for it to work. 
 
+# Level and map import
+
+Use `File -> Import -> BF2 -> Level / Map` for a visual map scene. Select the
+level directory itself, `client.zip`, `server.zip`, or a `.con` file inside an
+unpacked level. The importer recognizes untouched retail maps and unpacked mod
+maps automatically.
+
+See the dedicated [Level and Map Import guide](MAP_IMPORT.md) for setup,
+option behavior, archive resolution, terrain materials, performance,
+scripting, limitations, and troubleshooting.
+
+The import options control static objects, overgrowth, compiled roads, terrain,
+surrounding terrain, water, lighting, and the highest LOD index. Defaults are
+chosen for a complete visual map while limiting visible-object hierarchies to
+Geom0/LOD0:
+
+- **StaticObjects** and **StaticObjects_SkipLightmaps** contain instantiated
+  ObjectTemplates.
+- **Roads** contains compiled road meshes placed by `CompiledRoads.con`.
+- **Heightmaps** contains the primary RAW terrain and the eight secondary
+  cluster tiles.
+- **Water** contains one plane spanning the complete heightmap cluster.
+- **Lights** contains the map sun; the scene World uses parsed sky and ambient
+  colors.
+
+Meshes and DDS textures are read directly from the configured mod and level
+archives. Archive textures are stored in a local content-addressed cache and
+packed into the `.blend`, so the imported scene does not depend solely on
+temporary extraction files.
+
+The primary terrain reconstructs its compiled six-layer material from stitched
+colormap and RGB mask atlases, including tri-planar slope textures. Compiled
+roads use their source texture alpha, fade range, blend factor, UV behavior,
+and Refractor's one-centimetre terrain lift.
+
+The importer targets map visualization and editing. It does not reconstruct
+gameplay/AI logic, spawn systems, collision-only meshes, occluders, effects,
+the exact multi-layer terrain shader, sky domes, or fog volumes. The primary
+terrain uses `Hud/Minimap/ingameMap.dds` as an overview material. The eight
+secondary tiles use the map-authored `Colormaps/tx_s0.dds` through
+`tx_s7.dds` images.
+
 # Lightmapping
 This is a short guide on how to bake lightmaps using Blender Cycles rendering engine. Given my lack of knowledge in this area the feature is still in experimental state and largely untested. You may require some manual tinkering to get decent results. The lightmapping tools are accessible from the [Sidebar](https://docs.blender.org/manual/en/latest/interface/window_system/regions.html#sidebar) (`BF2` tab).
 ## Setting up the scene
-The first (optional) step is to prepare a configuration file. This defines how to load and post-process assets for lightmapping, but most importantly it contains the list of objects that should emit light. Click on the `+` icon to create a new config template and follow the descriptions of fields provided in comments, add what you need and remember to save it afterwards! When your config file is ready, make sure that your map files are unpacked and proceed with importing them using the `Load level` button, be patient as it may take a few minutes. If loading succeeds, you should see these four collections being created:
+The first (optional) step is to prepare a configuration file. This defines how to load and post-process assets for lightmapping, but most importantly it contains the list of objects that should emit light. Click on the `+` icon to create a new config template and follow the descriptions of fields provided in comments, add what you need and remember to save it afterwards! When your config file is ready, use the `Load level` button with a packed or unpacked map and be patient as it may take a few minutes. If loading succeeds, you should see these four collections being created:
 - **StaticObjects**: contains objects that should receive lightmaps. Only Geom0 will get imported since destroyable objects can't be lighmapped properly. Only LOD0 will be visible in the viewport, other LODs should remain hidden.
 - **StaticObjects_SkipLightmaps**: contains objects that should not receive lightmaps (only used for shadow casting). Those are non-StaticMeshes, overgrowth, objects that don't have lightmap UV or have `GeometryTemplate.dontGenerateLightmaps` set. By default those objects will use simplified hierarchy (only LOD0) to improve performance and import times.
 - **Lights**: contains all the point lights as well as the *Sun*

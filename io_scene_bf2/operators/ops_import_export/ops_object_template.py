@@ -67,7 +67,7 @@ class IMPORT_OT_bf2_object(bpy.types.Operator, ImporterBase, ConMeta):
 
     import_damage_states: EnumProperty(
         name="Import Damage States",
-        description="Import additional Geoms in addition to Geom0",
+        description="Import Geoms in addition to the primary ObjectTemplate state",
         items=IMPORT_MODE_ITEMS,
         default=IMPORT_MODE_OFF,
     ) # type: ignore
