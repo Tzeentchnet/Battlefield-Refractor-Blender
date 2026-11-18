@@ -35,6 +35,24 @@ Before using the add-on you must do the following:
 
 After that you may use `File -> Import/Export -> BF2` submenu or drag-and-drop any supported BF2 file into the viewport.
 
+The add-on preferences also define defaults for optional import data:
+
+| Preference | Off | On | Hidden |
+| --- | --- | --- | --- |
+| Import Collision Meshes | Skip CollisionMeshes referenced by ObjectTemplates | Import into the object hierarchy | Import into a dedicated hidden collection |
+| Import Occluders | Skip companion `.occ` files | Import companion `.occ` files | Import into a dedicated hidden collection |
+| Import LODs | Import only LOD0 | Import every LOD | Import LOD0 normally and place lower-detail LODs in a hidden collection |
+| Import Damage States | Import only Geom0 | Import every Geom | Import Geom0 normally and place additional Geoms in a hidden collection |
+
+All four preferences default to **Off**. Mesh and ObjectTemplate import dialogs
+can override them for one import. Explicitly importing a raw `.collisionMesh`
+or `.occ` file always imports the selected file regardless of these defaults.
+
+Additional Geoms represent damage states for many static and vehicle assets,
+but some BF2 assets use Geoms for other variants such as first-person and
+third-person meshes. Use **On**, **Hidden**, or the single-LOD/Geom selector
+when those variants are required.
+
 # Animating
 The add-on ships with extensive toolset for creating BF2 animations including batch import/export, automated scene setup & rigging and more. This section contains all the info you need to get started.
 
