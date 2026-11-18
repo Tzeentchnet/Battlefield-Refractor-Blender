@@ -1,10 +1,10 @@
 import bpy # type: ignore
-import bmesh # type: ignore
 
 from .bf2.bf2_occluder_planes import BF2OccluderPlanes, BF2OccluderPlanesException, Group
 from .bf2.bf2_common import Vec3
 from .exceptions import ImportException, ExportException
 from .utils import delete_object_if_exists
+from .utils.mesh import set_mesh_geometry
 
 def import_occluders(context, mesh_file, name='', reload=False):
     try:
@@ -16,24 +16,20 @@ def import_occluders(context, mesh_file, name='', reload=False):
 
     mesh = bpy.data.meshes.new(name)
     mesh_obj = bpy.data.objects.new(name, mesh)
-    bm = bmesh.new()
 
+    vertices = list()
+    faces = list()
     vertex_offset = 0
     for occ_group in bf2_occ.groups:
         # swap order and flip X axis (occluders get mirrored compared to meshes for some reason)
         verts = [(-v.x, v.z, v.y) for v in occ_group.verts]
-        for vert in verts:
-            bm.verts.new(vert)
-
-        bm.verts.ensure_lookup_table()
-        bm.verts.index_update()
+        vertices.extend(verts)
 
         for face in occ_group.planes:
-            face_verts = [bm.verts[v + vertex_offset] for v in face]
-            bm.faces.new(face_verts)
+            faces.append(tuple(vertex + vertex_offset for vertex in face))
         vertex_offset += len(verts)
 
-    bm.to_mesh(mesh)
+    set_mesh_geometry(mesh, vertices, faces)
 
     # make vertex groups
     vertex_offset = 0

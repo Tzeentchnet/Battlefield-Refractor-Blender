@@ -5,10 +5,11 @@ from bpy_extras.io_utils import poll_file_object_drop # type: ignore
 from ..utils import RegisterFactory
 from .ops_common import ImporterBase, ExporterBase
 from ...core.mesh import import_mesh, export_mesh
+from ...core.import_settings import IMPORT_MODE_ITEMS, IMPORT_MODE_OFF
 from ...core.skeleton import find_active_skeleton
 from ...core.utils import find_root, Reporter
 
-from ..ops_prefs import get_mod_dirs
+from ..ops_prefs import get_addon_preferences, get_mod_dirs
 
 class BundledMeshMeta:
     FILE_DESC = "BundledMesh (.bundledmesh)"
@@ -32,6 +33,20 @@ class SkinnedMeshMeta:
         return "SkinnedMesh"
 
 class MeshImportBase(ImporterBase):
+    import_lods: EnumProperty(
+        name="Import LODs",
+        description="Import lower-detail LODs in addition to LOD0",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+
+    import_damage_states: EnumProperty(
+        name="Import Damage States",
+        description="Import additional Geoms in addition to Geom0",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+
     geom: IntProperty(
         name="Geom",
         description="Geometry to load",
@@ -87,6 +102,11 @@ class MeshImportBase(ImporterBase):
     def draw(self, context):
         layout = self.layout
 
+        hierarchy = layout.column()
+        hierarchy.prop(self, "import_lods")
+        hierarchy.prop(self, "import_damage_states")
+        hierarchy.enabled = not self.only_selected_lod
+
         header, body = layout.panel("BF2_PT_import_geometry", default_closed=False)
         header.prop(self, "only_selected_lod")
 
@@ -112,6 +132,10 @@ class MeshImportBase(ImporterBase):
         col.enabled = self.mesh_type() == 'SkinnedMesh'
 
     def invoke(self, context, _event):
+        preferences = get_addon_preferences(context)
+        self.import_lods = preferences.import_lods
+        self.import_damage_states = preferences.import_damage_states
+
         # suggest to load only single LOD when a skeleton got imported previoulsy
         rig = find_active_skeleton(context)
         if rig:
@@ -147,6 +171,8 @@ class MeshImportBase(ImporterBase):
                         remove_loose_verts=self.remove_loose_verts,
                         free_normals=self.use_free_normals,
                         keep_skeleton_pose=self.keep_skeleton_pose,
+                        lod_mode=self.import_lods,
+                        damage_state_mode=self.import_damage_states,
                         reporter=Reporter(self.report),
                         **kwargs)
 

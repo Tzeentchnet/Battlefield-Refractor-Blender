@@ -54,7 +54,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           run-id: ${{ steps.resolve.outputs.run_id }}
-          pattern: io_scene_bf2-*
+          pattern: io_scene_bf2
           merge-multiple: true
           skip-decompress: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -65,9 +65,7 @@ jobs:
           TAG="${{ github.event.inputs.tag }}"
           cd artifacts
           for f in io_scene_bf2-*.zip; do
-            rest="${f#io_scene_bf2-}"
-            suffix="${rest#*-}"
-            mv "$f" "io_scene_bf2-${TAG}-${suffix}"
+            mv "$f" "io_scene_bf2-${TAG}.zip"
           done
 
       - name: Create GitHub Release

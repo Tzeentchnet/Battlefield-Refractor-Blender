@@ -1,11 +1,20 @@
 import bpy # type: ignore
-from bpy.props import StringProperty, CollectionProperty, IntProperty # type: ignore
+from bpy.props import StringProperty, CollectionProperty, EnumProperty, IntProperty # type: ignore
 
 from .utils import RegisterFactory
-from .. import __package__
+from ..core.import_settings import IMPORT_MODE_ITEMS, IMPORT_MODE_OFF
+from .. import __package__ as ADDON_PACKAGE
 
 def get_mod_dirs(context):
-    return [prop.mod_directory for prop in context.preferences.addons[__package__].preferences.mod_directories if prop.mod_directory]
+    return [
+        prop.mod_directory
+        for prop in get_addon_preferences(context).mod_directories
+        if prop.mod_directory
+    ]
+
+
+def get_addon_preferences(context):
+    return context.preferences.addons[ADDON_PACKAGE].preferences
 
 class BF2_OT_bf2_mod_path_add(bpy.types.Operator):
     bl_idname = "bf2.mod_path_add"
@@ -34,9 +43,33 @@ class ModPathCollection(bpy.types.PropertyGroup):
         ) # type: ignore
 
 class BF2AddonPreferences(bpy.types.AddonPreferences):
-    bl_idname = __package__
+    bl_idname = ADDON_PACKAGE
 
     mod_directories: CollectionProperty(type=ModPathCollection) # type: ignore
+    import_collision_meshes: EnumProperty(
+        name="Import Collision Meshes",
+        description="Default behavior for CollisionMeshes referenced by ObjectTemplates",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+    import_occluders: EnumProperty(
+        name="Import Occluders",
+        description="Default behavior for companion occlusion mesh files referenced by ObjectTemplate imports",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+    import_lods: EnumProperty(
+        name="Import LODs",
+        description="Default behavior for LOD1 and lower-detail LODs; Off imports only LOD0",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+    import_damage_states: EnumProperty(
+        name="Import Damage States",
+        description="Default behavior for additional Geoms; Off imports only Geom0",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
 
     @classmethod
     def register(cls):
@@ -44,6 +77,13 @@ class BF2AddonPreferences(bpy.types.AddonPreferences):
 
     def draw(self, context):
         layout = self.layout
+        layout.label(text="Import defaults")
+        import_defaults = layout.box()
+        import_defaults.prop(self, "import_collision_meshes")
+        import_defaults.prop(self, "import_occluders")
+        import_defaults.prop(self, "import_lods")
+        import_defaults.prop(self, "import_damage_states")
+
         layout.label(text="BF2 mod directories")
         for i, prop in enumerate(self.mod_directories):
             row = layout.row()
@@ -74,7 +114,7 @@ def is_debug_enabled():
 def debug_set_mod_path():
     if not is_debug_enabled():
         return
-    prefs = bpy.context.preferences.addons[__package__].preferences
+    prefs = get_addon_preferences(bpy.context)
     if len(prefs.mod_directories) != 0:
         return
     import os

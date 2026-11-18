@@ -1,5 +1,6 @@
 import bpy # type: ignore
 import bmesh # type: ignore
+import numpy as np
 
 from os import path
 from itertools import cycle
@@ -12,7 +13,8 @@ from .utils import (check_transform, check_scale, delete_object,
                     DEFAULT_REPORTER)
 from .exceptions import ImportException, ExportException
 from .utils.convert import invert_face
-from .utils import apply_modifiers as _apply_modifiers, is_backface, triangulate_mesh as _triangulate
+from .utils import apply_modifiers as _apply_modifiers, triangulate_mesh as _triangulate
+from .utils.mesh import prepare_mesh_faces, set_mesh_geometry
 
 MATERIAL_COLORS = [
     [0.267004, 0.004874, 0.329415, 1.],
@@ -152,61 +154,49 @@ class CollMeshImporter:
         for blender_idx, bf2_index in enumerate(list(material_indexes)):
             bf2_mat_idx_to_blend_mat_idx[bf2_index] = blender_idx
 
-        bm = bmesh.new()
-        for vert in verts:
-            bm.verts.new(vert)
-
-        bm.verts.ensure_lookup_table()
-        bm.verts.index_update()
-
-        fucked_up_faces = 0
-        double_sided_faces = set()
+        face_records = list()
         for face, bf2_mat_idx in zip(faces, face_materials):
-            face_verts = [bm.verts[i] for i in face]
             material_index = bf2_mat_idx_to_blend_mat_idx[bf2_mat_idx]
+            face_records.append((face, material_index))
 
-            try:
-                bm_face = bm.faces.new(face_verts)
-                bm_face.material_index = material_index
-            except ValueError:
-                # duplicate face.. or vert, lets find out
-                if not self.load_backfaces:
-                    fucked_up_faces += 1
-                    continue
-                if len(set(face_verts)) != 3: # duplicate verts
-                    fucked_up_faces += 1
-                    continue
-
-                bm.faces.index_update()
-                bm_face_verts = [vert.index for vert in face_verts]
-                for other_bm_face in bm.faces:
-                    if is_backface(bm_face_verts, [vert.index for vert in other_bm_face.verts]):
-                        if material_index != other_bm_face.material_index: # XXX: could they differ ??
-                            raise ImportException("Found double-sided face with a different material on each side, aborting import")
-                        double_sided_faces.add(other_bm_face.index)
-                        break
-                else:
-                    # must be a duplicate face
-                    fucked_up_faces += 1
+        try:
+            faces, material_indices, double_sided_faces, fucked_up_faces = prepare_mesh_faces(
+                face_records,
+                load_backfaces=self.load_backfaces,
+            )
+        except ValueError as error:
+            raise ImportException(f"{error}, aborting import") from error
 
         if fucked_up_faces:
             self.reporter.warning(f"'{name}': Skipped {fucked_up_faces} invalid faces")
 
+        mesh = bpy.data.meshes.new(name)
+        set_mesh_geometry(mesh, verts, faces)
+
         if self.remove_loose_verts:
+            bm = bmesh.new()
+            bm.from_mesh(mesh)
             loose_verts = [v for v in bm.verts if not v.link_faces]
             loose_verts_count = len(loose_verts)
             if loose_verts:
                 bmesh.ops.delete(bm, geom=loose_verts, context='VERTS')
+                bm.to_mesh(mesh)
+            bm.free()
             if loose_verts_count > 0:
                 self.reporter.info(f'{name}: removed {loose_verts_count} loose vertices')
 
-        mesh = bpy.data.meshes.new(name)
-        bm.to_mesh(mesh)
+        if material_indices:
+            mesh.polygons.foreach_set(
+                'material_index',
+                np.asarray(material_indices, dtype=np.int32),
+            )
 
         # mark faces with backfaces
         if double_sided_faces:
             backface = mesh.attributes.new('backface', 'BOOLEAN', 'FACE')
-            backface.data.foreach_set('value', [poly.index in double_sided_faces for poly in mesh.polygons])
+            values = np.zeros(len(mesh.polygons), dtype=bool)
+            values[list(double_sided_faces)] = True
+            backface.data.foreach_set('value', values)
 
         # add materials to mesh
         for bf2_index in material_indexes:

@@ -7,10 +7,11 @@ from ..utils import RegisterFactory
 from .ops_common import ImporterBase, ExporterBase
 from ...core.object_template import (import_object_template, export_object_template,
                                      parse_geom_type)
+from ...core.import_settings import IMPORT_MODE_ITEMS, IMPORT_MODE_OFF
 from ...core.skeleton import find_all_skeletons
 from ...core.utils import Reporter, find_root, next_power_of_2, prev_power_of_2
 
-from ..ops_prefs import get_mod_dirs
+from ..ops_prefs import get_addon_preferences, get_mod_dirs
 
 class ConMeta:
     FILE_DESC = "ObjectTemplate (.con)"
@@ -43,10 +44,32 @@ class IMPORT_OT_bf2_object(bpy.types.Operator, ImporterBase, ConMeta):
     bl_label = "Import ObjectTemplate"
     filter_glob: StringProperty(default="*.con", options={'HIDDEN'}) # type: ignore
 
-    import_collmesh: BoolProperty(
-        name="Import CollisionMesh",
-        description="Load CollisionMesh and merge with the object hierarchy",
-        default=True
+    import_collision_meshes: EnumProperty(
+        name="Import Collision Meshes",
+        description="Load the referenced CollisionMesh; Hidden places it in a hidden collection",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+
+    import_occluders: EnumProperty(
+        name="Import Occluders",
+        description="Load a companion .occ file; Hidden places it in a hidden collection",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+
+    import_lods: EnumProperty(
+        name="Import LODs",
+        description="Import lower-detail LODs in addition to LOD0",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
+    ) # type: ignore
+
+    import_damage_states: EnumProperty(
+        name="Import Damage States",
+        description="Import additional Geoms in addition to Geom0",
+        items=IMPORT_MODE_ITEMS,
+        default=IMPORT_MODE_OFF,
     ) # type: ignore
 
     import_rig_mode : EnumProperty(
@@ -105,7 +128,10 @@ class IMPORT_OT_bf2_object(bpy.types.Operator, ImporterBase, ConMeta):
     def draw(self, context):
         layout = self.layout
 
-        layout.prop(self, "import_collmesh")
+        layout.prop(self, "import_collision_meshes")
+        layout.prop(self, "import_occluders")
+        layout.prop(self, "import_lods")
+        layout.prop(self, "import_damage_states")
         row = layout.row()
         row.label(text="Import Rigs:")
         row.prop(self, "import_rig_mode", text='')
@@ -153,7 +179,10 @@ class IMPORT_OT_bf2_object(bpy.types.Operator, ImporterBase, ConMeta):
 
         context.view_layer.objects.active = \
             import_object_template(context, self.filepath,
-                import_collmesh=self.import_collmesh,
+                collision_mesh_mode=self.import_collision_meshes,
+                occluder_mode=self.import_occluders,
+                lod_mode=self.import_lods,
+                damage_state_mode=self.import_damage_states,
                 import_rig_mode=self.import_rig_mode,
                 geom_to_ske_name=geom_to_ske,
                 texture_paths=mod_paths,
@@ -166,6 +195,11 @@ class IMPORT_OT_bf2_object(bpy.types.Operator, ImporterBase, ConMeta):
                 reporter=Reporter(self.report))
 
     def invoke(self, context, _event):
+        preferences = get_addon_preferences(context)
+        self.import_collision_meshes = preferences.import_collision_meshes
+        self.import_occluders = preferences.import_occluders
+        self.import_lods = preferences.import_lods
+        self.import_damage_states = preferences.import_damage_states
         IMPORT_OT_bf2_object.instance=self
         return super().invoke(context, _event)
 

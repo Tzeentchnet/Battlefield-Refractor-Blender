@@ -1,18 +1,18 @@
 import os
 import os.path as path
 import math
-import tempfile
 import bpy # type: ignore
 from abc import ABC, abstractmethod
 import numpy as np
 
-from .... import rectpack
 from ...mesh import MeshExporter
 from ...utils import (DEFAULT_REPORTER,
-                    convert_to_dds, file_name,
+                    file_name,
                     save_img_as_dds, find_root,
                     is_pow_two, obj_bounds,
                     strip_geom_lod_prefix as strip_prefix)
+from ...utils.image import array_to_image, image_to_array
+from ...utils.rectangle_packer import pack_rectangles
 from .common import plug_socket_to, unplug_socket_from, gen_lm_key
 
 # -------------------
@@ -43,12 +43,9 @@ class BakerBase(ABC):
         self._pp_out_dir = out_dir
 
     def _post_process(self, image):
-        channels = image.channels
-        w, h = image.size
-        pixels = np.array(image.pixels[:]).reshape((h, w, channels))
+        pixels = image_to_array(image)
         pixels[:, :, 2] = pixels[:, :, 2] * (1 - self._pp_ambient_light_level) + self._pp_ambient_light_level
-        image.pixels = pixels.ravel().tolist()
-        image.update()
+        array_to_image(image, pixels)
 
     def _post_process_and_save(self, context, image, name=''):
         if not name:
@@ -66,16 +63,9 @@ class BakerBase(ABC):
             save_img_as_dds(image, os.path.join(self._output_dir, img_name), self._dds_fmt)
         else:
             # keep both variants
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                tmp_file = os.path.join(tmp_dir, f'{name}.tga')
-                image.file_format = 'TARGA'
-                image.filepath_raw = tmp_file
-                image.alpha_mode = 'STRAIGHT'
-                image.save(filepath=tmp_file)
-                convert_to_dds(tmp_file, self._output_dir, self._dds_fmt)
-                self._post_process(image)
-                image.save(filepath=tmp_file)
-                convert_to_dds(tmp_file, self._pp_out_dir, self._dds_fmt)
+            save_img_as_dds(image, os.path.join(self._output_dir, img_name), self._dds_fmt)
+            self._post_process(image)
+            save_img_as_dds(image, os.path.join(self._pp_out_dir, img_name), self._dds_fmt)
 
     def bake_next(self, context):
         if not self.prepare_next(context):
@@ -180,22 +170,13 @@ class PostProcessor:
         image = bpy.data.images.load(filepath, check_existing=False)
         image.alpha_mode = 'NONE'
 
-        w, h = image.size
-        channels = image.channels
-        pixels = np.array(image.pixels[:]).reshape((h, w, channels))
+        pixels = image_to_array(image)
         pixels[:, :, 2] = pixels[:, :, 2] * (1 - self._blue_color_boost) + self._blue_color_boost
-        image.pixels = pixels.ravel().tolist()
-        image.update()
+        array_to_image(image, pixels)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_file = os.path.join(tmp_dir, file_name(filepath) + '.tga')
-            context.scene.view_settings.view_transform = 'Standard'
-            context.scene.render.resolution_x = image.size[0]
-            context.scene.render.resolution_y = image.size[1]
-            context.scene.render.image_settings.color_mode = 'RGB'
-            context.scene.render.image_settings.file_format = 'TARGA'
-            image.save_render(tmp_file, scene=context.scene)
-            convert_to_dds(tmp_file, self._out_dir, self._dds_fmt)
+        context.scene.view_settings.view_transform = 'Standard'
+        outfile = os.path.join(self._out_dir, file_name(filepath) + '.dds')
+        save_img_as_dds(image, outfile, self._dds_fmt)
 
         bpy.data.images.remove(image)
         return True
@@ -270,15 +251,11 @@ def find_heightmap(context):
             return obj
 
 def _offset_uvs(uv_layer, u, v):
-    tmp = len(uv_layer.data) * 2 * [None]
+    tmp = np.empty(len(uv_layer.data) * 2, dtype=np.float32)
     uv_layer.data.foreach_get('uv', tmp)
-    def do_offset(i, value):
-        if i % 2 == 0:
-            return value + u
-        else:
-            return value + v
-    tmp = [do_offset(i, value) for i, value in enumerate(tmp)]
-    uv_layer.data.foreach_set('uv', tmp)
+    tmp = tmp.reshape((-1, 2))
+    tmp += (u, v)
+    uv_layer.data.foreach_set('uv', tmp.ravel())
 
 class TerrainBaker(BakerBase):
     def __init__(self, context, output_dir, dds_fmt='NONE',
@@ -338,15 +315,12 @@ class TerrainBaker(BakerBase):
         mesh.uv_layers.active = mesh.uv_layers['UVMap']
         self.uv_layer = mesh.uv_layers.new(name='LightmapBakeUV')
 
-        tmp = len(self.uv_layer.data) * 2 * [None]
+        tmp = np.empty(len(self.uv_layer.data) * 2, dtype=np.float32)
         self.uv_layer.data.foreach_get('uv', tmp)
-
-        def do_scale_and_offset(i, value):
-            if i % 2 == 0:
-                return grid_size * value
-            else:
-                return 1 - grid_size * value
-        self.uv_layer.data.foreach_set('uv', [do_scale_and_offset(i, value) for i, value in enumerate(tmp)])
+        tmp = tmp.reshape((-1, 2))
+        tmp[:, 0] *= grid_size
+        tmp[:, 1] = 1 - grid_size * tmp[:, 1]
+        self.uv_layer.data.foreach_set('uv', tmp.ravel())
 
         self._texture_node_light = _setup_material_for_baking(self._default_terrain_mat, uv=self.uv_layer.name)
         self._texture_node_water_depth = _setup_material_for_baking(self._water_depth_mat, uv=self.uv_layer.name)
@@ -416,10 +390,10 @@ class TerrainBaker(BakerBase):
         water_depth_map = self._texture_node_water_depth.image
         assert light_map and water_depth_map
 
-        light_pixels = np.array(light_map.pixels[:])
-        water_pixels = np.array(water_depth_map.pixels[:])
-        light_pixels[0::4] = water_pixels[0::4]
-        light_map.pixels = light_pixels.tolist()
+        light_pixels = image_to_array(light_map)
+        water_pixels = image_to_array(water_depth_map)
+        light_pixels[:, :, 0] = water_pixels[:, :, 0]
+        array_to_image(light_map, light_pixels)
 
         col, row = self.patches_to_bake[self._patch_index]
         self._post_process_and_save(context, light_map, f'tx{col:02d}x{row:02d}')
@@ -714,8 +688,7 @@ class ObjectParallelBaker(BakerBase):
         # and to get best quality atlases will get split per LOD
         self._atlases = list()
         for lod_idx, objects in self._lod_to_objects.items():
-            packer = rectpack.newPacker(rotation=False)
-
+            rectangles = []
             for obj in objects:
                 width, height = obj.bf2_lightmap_size
                 width += self._margin
@@ -725,15 +698,15 @@ class ObjectParallelBaker(BakerBase):
                     w, h = obj.bf2_lightmap_size
                     raise ValueError(f"lightmap size for '{obj.name}' ({w}x{h} plus margin of {self._margin}) doesn't fit on the specified atlas size ({self._atlas_size[0]}x{self._atlas_size[1]})")
 
-                packer.add_rect(width, height, obj)
+                rectangles.append((width, height, obj))
 
-            for _ in range(0, 99):
-                packer.add_bin(*self._atlas_size)
-
-            packer.pack()
-
-            for bin in packer:
-                self._atlases.append(bin)
+            self._atlases.extend(
+                pack_rectangles(
+                    rectangles,
+                    self._atlas_size,
+                    max_bins=99,
+                )
+            )
 
         self._total_count = len(self._atlases)
 
@@ -755,14 +728,12 @@ class ObjectParallelBaker(BakerBase):
             offset_v -= bf2_lm_uv_offset[1]
 
             uv_layer = mesh.uv_layers['UV4']
-            uv_buf = len(uv_layer.data) * 2 * [None]
+            uv_buf = np.empty(len(uv_layer.data) * 2, dtype=np.float32)
             uv_layer.data.foreach_get('uv', uv_buf)
-            def do_scale_and_offset(i, value):
-                if i % 2 == 0:
-                    return (value % 1.0) * scale_u + offset_u
-                else:
-                    return (value % 1.0) * scale_v + offset_v
-            uv_layer.data.foreach_set('uv', [do_scale_and_offset(i, value) for i, value in enumerate(uv_buf)])
+            uv_buf = uv_buf.reshape((-1, 2))
+            uv_buf[:, 0] = np.remainder(uv_buf[:, 0], 1.0) * scale_u + offset_u
+            uv_buf[:, 1] = np.remainder(uv_buf[:, 1], 1.0) * scale_v + offset_v
+            uv_layer.data.foreach_set('uv', uv_buf.ravel())
 
             # mark as modified
             mesh['bf2_lm_uv_scale'] = (scale_u, scale_v)
@@ -858,8 +829,7 @@ class ObjectParallelBaker(BakerBase):
 
             src_img = self._bake_image
             atlas_width, atlas_height = src_img.size
-            num_channels = src_img.channels
-            src_pixels = np.array(src_img.pixels[:]).reshape((atlas_height, atlas_width, num_channels))
+            src_pixels = image_to_array(src_img)
 
             for rect in atlas:
                 lm_name = self._lod_to_lm_key[rect.rid.name]
@@ -870,7 +840,7 @@ class ObjectParallelBaker(BakerBase):
                 tile_img = bpy.data.images.new(
                     name=lm_name, width=w, height=h)
                 tile = src_pixels[y:y+h, x:x+w, :]
-                tile_img.pixels = tile.ravel().tolist()
+                array_to_image(tile_img, tile)
 
                 self._post_process_and_save(context, tile_img)
                 bpy.data.images.remove(tile_img)

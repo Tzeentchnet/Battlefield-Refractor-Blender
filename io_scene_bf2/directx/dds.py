@@ -475,6 +475,12 @@ class DDSHeader(c.LittleEndianStructure):
         fmt = self.get_format_as_str()
         if ("ASTC" in fmt):
             return 16
+        if ("BC1" in fmt or "BC4" in fmt):
+            return 8
+        if any(name in fmt for name in ("BC2", "BC3", "BC5", "BC6", "BC7")):
+            return 16
+        if ("R8G8B8A8" in fmt):
+            return 4
         if ("B8G8R8A8" in fmt):
             return 4
         if ("R16G16B16A16" in fmt):

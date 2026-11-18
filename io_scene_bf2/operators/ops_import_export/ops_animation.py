@@ -3,7 +3,6 @@ import os
 from bpy.props import StringProperty, BoolProperty, IntProperty, CollectionProperty, EnumProperty # type: ignore
 from bpy_extras.io_utils import poll_file_object_drop # type: ignore
 
-from ...core.utils.compat import SUPPORTS_ACTION_SLOTS
 from .ops_common import ImporterBase, ExporterBase
 from ..utils import RegisterFactory
 
@@ -84,8 +83,6 @@ def multi_action_update(self, context):
     if self.multi_action:
         context.space_data.params.filename = ''
 
-MULTI_ACTION_WARN = "" if SUPPORTS_ACTION_SLOTS else "[requires Blender 4.4]\n"
-
 # -------------------------- Export --------------------------
 
 class SelectableItemCollection(bpy.types.PropertyGroup):
@@ -103,8 +100,7 @@ class EXPORT_OT_bf2_animation(bpy.types.Operator, ExporterBase, BafMeta):
 
     multi_action: BoolProperty(
         name="Actions to export:",
-        description=MULTI_ACTION_WARN +
-            "Export multiple Actions into separate animation files (using Action frame range), otherwise export only the currently active Action (using Scene frame range)",
+        description="Export multiple Actions into separate animation files (using Action frame range), otherwise export only the currently active Action (using Scene frame range)",
         default=False,
         update=multi_action_update
     ) # type: ignore
@@ -163,10 +159,9 @@ class EXPORT_OT_bf2_animation(bpy.types.Operator, ExporterBase, BafMeta):
         layout.prop(self, 'space', text="Space:")
         header, body = layout.panel("BF2_PT_actions_for_export", default_closed=True)
         header.prop(self, 'multi_action')
-        header.enabled = SUPPORTS_ACTION_SLOTS
         if body:
             for prop in self.actions_for_export:
-                body.enabled = header.enabled and self.multi_action
+                body.enabled = self.multi_action
                 body.prop(prop, "included", text=prop["name"])
         header, body = layout.panel("BF2_PT_bones_for_export", default_closed=False)
         header.label(text="Bones to export:")
@@ -201,10 +196,7 @@ class EXPORT_OT_bf2_animation(bpy.types.Operator, ExporterBase, BafMeta):
     def invoke(self, context, _event):
         rig = find_active_skeleton(context)
         self._update_bones_for_export(rig)
-        if SUPPORTS_ACTION_SLOTS:
-            self._update_actions_for_export(rig)
-        else:
-            self.multi_action = False
+        self._update_actions_for_export(rig)
 
         res = super().invoke(context, _event)
         if self.multi_action:

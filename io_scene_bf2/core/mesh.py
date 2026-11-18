@@ -2,8 +2,9 @@ import bpy # type: ignore
 import bmesh # type: ignore
 import os
 import enum
+import re
+import numpy as np
 
-from itertools import chain
 from mathutils import Vector, Matrix # type: ignore
 
 from .bf2.bf2_mesh import BF2MeshException, BF2Mesh, BF2BundledMesh, BF2SkinnedMesh, BF2StaticMesh
@@ -18,7 +19,6 @@ from .utils import (check_transform, delete_object,
                     check_scale,
                     file_name,
                     DEFAULT_REPORTER)
-from .utils.compat import SUPPORTS_GEOMETRY_NODE_UV_TANGENT
 from .skeleton import (ske_get_bone_rot,
                        ske_weapon_part_ids,
                        find_rig_attached_to_object)
@@ -31,7 +31,19 @@ from .material import (setup_material,
                             get_texture_suffix,
                             TEXTURE_MAPS)
 from .utils.convert import conv_bf2_to_blender, conv_blender_to_bf2, flip_uv, invert_face, swap_zy
-from .utils import apply_modifiers, is_backface, triangulate_mesh
+from .utils import apply_modifiers, triangulate_mesh
+from .utils.collections import (
+    get_or_create_collection,
+    move_object_hierarchy_to_collection,
+    move_object_to_collection,
+)
+from .utils.mesh import prepare_mesh_faces, set_mesh_geometry
+from .import_settings import (
+    IMPORT_MODE_ON,
+    should_hide_index,
+    should_import_index,
+    validate_import_mode,
+)
 
 _DEBUG = False
 
@@ -57,6 +69,69 @@ _MESH_TYPES = {
 # hardcoded BF2 limit
 # if you are a BF2142 modder you could increase this to 50 :)
 MAX_GEOM_LIMIT = MAX_BONE_LIMIT = 26
+
+LOD_COLLECTION_SUFFIX = ' - LODs'
+DAMAGE_STATE_COLLECTION_SUFFIX = ' - Damage States'
+
+_GEOM_OBJECT_PATTERN = re.compile(r'^G(\d+)__')
+_LOD_OBJECT_PATTERN = re.compile(r'^G(\d+)L(\d+)__')
+
+
+def organize_mesh_hierarchy(
+    context,
+    root_obj,
+    mesh_name,
+    lod_mode=IMPORT_MODE_ON,
+    damage_state_mode=IMPORT_MODE_ON,
+    skip_subtree=None,
+):
+    validate_import_mode(lod_mode, "LOD import mode")
+    validate_import_mode(damage_state_mode, "damage state import mode")
+
+    lod_collection = None
+    damage_collection = None
+
+    for geom_obj in tuple(root_obj.children):
+        geom_match = _GEOM_OBJECT_PATTERN.match(geom_obj.name)
+        if geom_match is None:
+            continue
+        geom_index = int(geom_match.group(1))
+
+        hide_damage_state = should_hide_index(
+            geom_index,
+            damage_state_mode,
+        )
+        if hide_damage_state:
+            if damage_collection is None:
+                damage_collection = get_or_create_collection(
+                    context,
+                    mesh_name + DAMAGE_STATE_COLLECTION_SUFFIX,
+                    hidden=True,
+                )
+            move_object_to_collection(geom_obj, damage_collection)
+
+        for lod_obj in tuple(geom_obj.children):
+            lod_match = _LOD_OBJECT_PATTERN.match(lod_obj.name)
+            if lod_match is None:
+                continue
+            lod_index = int(lod_match.group(2))
+            if should_hide_index(lod_index, lod_mode):
+                if lod_collection is None:
+                    lod_collection = get_or_create_collection(
+                        context,
+                        mesh_name + LOD_COLLECTION_SUFFIX,
+                        hidden=True,
+                    )
+                target_collection = lod_collection
+            elif hide_damage_state:
+                target_collection = damage_collection
+            else:
+                continue
+            move_object_hierarchy_to_collection(
+                lod_obj,
+                target_collection,
+                skip_subtree=skip_subtree,
+            )
 
 def import_mesh(context, mesh_file, **kwargs):
     return _import_mesh(context, mesh_file, **kwargs)
@@ -95,7 +170,8 @@ class MeshImporter:
     def __init__(self, context, mesh_file, mesh_type='', reload=False,
                  texture_paths=[], geom_to_ske=None, merge_materials=True, free_normals=False,
                  load_backfaces=True, remove_loose_verts=True, loader=None, silent=False, reporter=DEFAULT_REPORTER,
-                 keep_skeleton_pose=False):
+                 keep_skeleton_pose=False, lod_mode=IMPORT_MODE_ON,
+                 damage_state_mode=IMPORT_MODE_ON):
         self.context = context
         self.is_vegitation = 'vegitation' in mesh_file.lower() # yeah this is legit how BF2 detects it lmao
 
@@ -118,6 +194,11 @@ class MeshImporter:
         self.remove_loose_verts = remove_loose_verts
         self.silent = silent
         self.keep_skeleton_pose = keep_skeleton_pose
+        self.lod_mode = validate_import_mode(lod_mode, "LOD import mode")
+        self.damage_state_mode = validate_import_mode(
+            damage_state_mode,
+            "damage state import mode",
+        )
 
     def import_mesh(self, name='', geom=None, lod=None):
         try:
@@ -131,16 +212,27 @@ class MeshImporter:
             if self.reload: delete_object_if_exists(self.mesh_name)
             root_obj = bpy.data.objects.new(self.mesh_name, None)
             self.context.scene.collection.objects.link(root_obj)
-            for geom_idx, _ in enumerate(self.bf2_mesh.geoms):
+            for geom_idx, bf2_geom in enumerate(self.bf2_mesh.geoms):
+                if not should_import_index(geom_idx, self.damage_state_mode):
+                    continue
                 geom_name = self.build_mesh_prefix(geom_idx) + self.mesh_name
                 if self.reload: delete_object_if_exists(geom_name)
                 geom_obj = bpy.data.objects.new(geom_name, None)
                 geom_obj.parent = root_obj
                 self.context.scene.collection.objects.link(geom_obj)
-                for lod_idx, _ in enumerate(self.bf2_mesh.geoms[geom_idx].lods):
+                for lod_idx, bf2_lod in enumerate(bf2_geom.lods):
+                    if not should_import_index(lod_idx, self.lod_mode):
+                        continue
                     lod_obj = self._import_mesh_lod(self.build_mesh_prefix(geom_idx, lod_idx) + self.mesh_name,
-                                                    self.bf2_mesh.geoms[geom_idx].lods[lod_idx])
+                                                    bf2_lod)
                     lod_obj.parent = geom_obj
+            organize_mesh_hierarchy(
+                self.context,
+                root_obj,
+                self.mesh_name,
+                lod_mode=self.lod_mode,
+                damage_state_mode=self.damage_state_mode,
+            )
             return root_obj
         else:
             return self._import_mesh_lod(self.mesh_name, self.bf2_mesh.geoms[geom].lods[lod])
@@ -177,18 +269,16 @@ class MeshImporter:
 
         mesh_materials = list()
 
-        bm = bmesh.new()
+        vertex_positions = list()
+        face_records = list()
         vertex_offset = 0
-
-        fucked_up_faces = 0
-        double_sided_faces = set()
 
         for bf2_mat in bf2_lod.materials:
             uv_ratio = None
 
             # create vertices
             for vert in bf2_mat.vertices:
-                bm.verts.new(swap_zy(vert.position))
+                vertex_positions.append(swap_zy(vert.position))
 
                 # Normals
                 if has_normals:
@@ -222,9 +312,6 @@ class MeshImporter:
                     else:
                         vertex_animuv_rot_center.append(Vector((0, 0)))
                     vertex_animuv_matrix_index.append(uv_matrix_idx)
-
-            bm.verts.ensure_lookup_table()
-            bm.verts.index_update()
 
             # create materials
             mat_idx = self._get_unique_material_index(bf2_mat)
@@ -296,36 +383,30 @@ class MeshImporter:
 
             # create faces
             for face in bf2_mat.faces:
-                face_verts = [bm.verts[v + vertex_offset] for v in invert_face(face)]
-                try:
-                    bm_face = bm.faces.new(face_verts)
-                    bm_face.material_index = material_index
-                except ValueError:
-                    # duplicate face.. or vert, lets find out
-                    if not self.load_backfaces:
-                        fucked_up_faces += 1
-                        continue
-                    if len(set(face_verts)) != 3: # duplicate vert
-                        fucked_up_faces += 1
-                        continue
-
-                    bm.faces.index_update()
-                    bm_face_verts = [vert.index for vert in face_verts]
-                    for other_bm_face in bm.faces:
-                        if is_backface(bm_face_verts, [vert.index for vert in other_bm_face.verts]):
-                            if material_index != other_bm_face.material_index: # XXX: could they differ ??
-                                raise ImportException("Found double-sided face with a different material on each side, aborting import")
-                            double_sided_faces.add(other_bm_face.index)
-                            break
-                    else:
-                        # must be a duplicate face
-                        fucked_up_faces += 1
+                face_records.append(
+                    (
+                        tuple(vertex + vertex_offset for vertex in invert_face(face)),
+                        material_index,
+                    )
+                )
 
             vertex_offset += len(bf2_mat.vertices)
 
+        try:
+            faces, face_materials, double_sided_faces, fucked_up_faces = prepare_mesh_faces(
+                face_records,
+                load_backfaces=self.load_backfaces,
+            )
+        except ValueError as error:
+            raise ImportException(f"{error}, aborting import") from error
+
         mesh = bpy.data.meshes.new(name)
-        bm.to_mesh(mesh)
-        bm.free()
+        set_mesh_geometry(mesh, vertex_positions, faces)
+        if face_materials:
+            mesh.polygons.foreach_set(
+                'material_index',
+                np.asarray(face_materials, dtype=np.int32),
+            )
 
         if fucked_up_faces and not self.silent:
             self.reporter.warning(f"'{name}': Skipped {fucked_up_faces} invalid faces")
@@ -333,7 +414,9 @@ class MeshImporter:
         # mark faces with backfaces
         if double_sided_faces:
             backface = mesh.attributes.new('backface', 'BOOLEAN', 'FACE')
-            backface.data.foreach_set('value', [poly.index in double_sided_faces for poly in mesh.polygons])
+            values = np.zeros(len(mesh.polygons), dtype=bool)
+            values[list(double_sided_faces)] = True
+            backface.data.foreach_set('value', values)
 
         # apply materials
         for material in mesh_materials:
@@ -343,41 +426,52 @@ class MeshImporter:
         if has_normals:
             # IMPORTANT: enable smooth shading, it MUST be enabled before calculating custom split normals
             # otherwise on defomration normals will be broken af
-            mesh.attributes['sharp_face'].data.foreach_set('value', [False] * len(mesh.polygons))
+            sharp_face = mesh.attributes.get('sharp_face')
+            if sharp_face is None:
+                sharp_face = mesh.attributes.new('sharp_face', 'BOOLEAN', 'FACE')
+            sharp_face.data.foreach_set(
+                'value',
+                np.zeros(len(mesh.polygons), dtype=bool),
+            )
             if self.free_normals:
                 # https://docs.blender.org/manual/en/dev/modeling/meshes/structure.html#free-normals
                 custom_normal = mesh.attributes.new('custom_normal', 'FLOAT_VECTOR', 'POINT')
-                custom_normal.data.foreach_set('vector', [n for vn in vertex_normals for n in vn])
+                custom_normal.data.foreach_set(
+                    'vector',
+                    np.asarray(vertex_normals, dtype=np.float32).ravel(),
+                )
             else:
                 mesh.normals_split_custom_set_from_vertices(vertex_normals)
 
         # apply Animated UVs data
         if has_anim_uv:
             animuv_matrix_index = mesh.attributes.new('animuv_matrix_index', 'INT', 'POINT')
-            animuv_matrix_index.data.foreach_set('value', vertex_animuv_matrix_index)
+            animuv_matrix_index.data.foreach_set(
+                'value',
+                np.asarray(vertex_animuv_matrix_index, dtype=np.int32),
+            )
 
             animuv_rot_center = mesh.color_attributes.new('animuv_rot_center', type='FLOAT2', domain='POINT')
-            animuv_rot_center.data.foreach_set('vector', list(chain(*vertex_animuv_rot_center)))
+            animuv_rot_center.data.foreach_set(
+                'vector',
+                np.asarray(vertex_animuv_rot_center, dtype=np.float32).ravel(),
+            )
 
         # apply UVs
+        loop_vertex_indices = np.empty(len(mesh.loops), dtype=np.int32)
+        mesh.loops.foreach_get('vertex_index', loop_vertex_indices)
         for uv_chan, vertex_uvs in uvs.items():
-            loop_uvs = list()
-            for l in mesh.loops:
-                uv = vertex_uvs[l.vertex_index]
-                loop_uvs.extend(uv)
-
             uvlayer = mesh.uv_layers.new(name=f'UV{uv_chan}')
-            uvlayer.data.foreach_set('uv', loop_uvs)
+            vertex_uvs = np.asarray(vertex_uvs, dtype=np.float32)
+            uvlayer.data.foreach_set('uv', vertex_uvs[loop_vertex_indices].ravel())
 
         mesh_obj = bpy.data.objects.new(name, mesh)
         self.context.scene.collection.objects.link(mesh_obj)
 
         if isinstance(bf2_mesh, BF2SkinnedMesh):
-            if SUPPORTS_GEOMETRY_NODE_UV_TANGENT:
-                # add custom modifier which saves tangent & normal vectors to attributes
-                # need those from before mesh deformation to fix shading with OS normal maps later
-                modifier = mesh_obj.modifiers.new(type='NODES', name="SaveTangentSpace")
-                modifier.node_group = _make_rest_tangent_space_node()
+            # Save tangent space before deformation to support object-space normal maps.
+            modifier = mesh_obj.modifiers.new(type='NODES', name="SaveTangentSpace")
+            modifier.node_group = _make_rest_tangent_space_node()
 
             self._import_rig_skinned_mesh(mesh_obj, bf2_lod)
         elif isinstance(bf2_mesh, BF2BundledMesh):
@@ -578,7 +672,9 @@ class MeshImporter:
         depsgraph = self.context.evaluated_depsgraph_get()
         depsgraph.update()
         eval_mesh_obj = mesh_obj.evaluated_get(depsgraph)
-        mesh_obj.data.vertices.foreach_set('co', [c for v in eval_mesh_obj.data.vertices for c in v.co])
+        coordinates = np.empty(len(eval_mesh_obj.data.vertices) * 3, dtype=np.float32)
+        eval_mesh_obj.data.vertices.foreach_get('co', coordinates)
+        mesh_obj.data.vertices.foreach_set('co', coordinates)
         mesh_obj.data.update()
 
         # remove the temporary armature modifier

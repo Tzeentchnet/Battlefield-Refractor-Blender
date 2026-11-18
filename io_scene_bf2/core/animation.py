@@ -1,4 +1,5 @@
 import bpy # type: ignore
+import numpy as np
 
 from mathutils import Matrix # type: ignore
 from .bf2.bf2_animation import BF2Animation, BF2KeyFrame, BF2AnimationException
@@ -178,7 +179,7 @@ def _deselect_all_keyframes(action):
 
         fcurve.select = False
 
-        selection_array = [0] * count
+        selection_array = np.zeros(count, dtype=bool)
         fcurve.keyframe_points.foreach_set("select_control_point", selection_array)
         fcurve.keyframe_points.foreach_set("select_left_handle", selection_array)
         fcurve.keyframe_points.foreach_set("select_right_handle", selection_array)

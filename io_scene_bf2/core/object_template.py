@@ -2,6 +2,7 @@ from typing import Dict
 import bpy # type: ignore
 import os
 import bmesh # type: ignore
+import numpy as np
 
 from getpass import getuser
 from mathutils import Matrix, Vector, Euler # type: ignore
@@ -11,8 +12,9 @@ from .bf2.bf2_engine import (BF2Engine, BF2EngineException, ObjectTemplate,
                              GeometryTemplate, CollisionMeshTemplate)
 
 from .bf2.bf2_mesh import BF2Samples
-from .mesh import MeshImporter, MeshExporter
+from .mesh import MeshImporter, MeshExporter, organize_mesh_hierarchy
 from .collision_mesh import CollMeshImporter, CollMeshExporter
+from .occluders import import_occluders
 from .skeleton import find_all_skeletons, find_rig_attached_to_object
 
 from .utils import (check_transform, delete_object, check_suffix,
@@ -24,18 +26,51 @@ from .utils import (check_transform, delete_object, check_suffix,
 from .exceptions import ImportException, ExportException
 from .utils.convert import matrix_to_yaw_pitch_roll, swap_zy, yaw_pitch_roll_to_matrix
 from .utils import apply_modifiers as _apply_modifiers, triangulate_mesh as _triangulate
+from .utils.collections import get_or_create_collection, move_object_to_collection
+from .import_settings import (
+    IMPORT_MODE_HIDDEN,
+    IMPORT_MODE_OFF,
+    IMPORT_MODE_ON,
+    validate_import_mode,
+)
 
 NONVIS_PRFX = 'NONVIS_'
 COL_SUFFIX = '_COL'
 ANCHOR_PREFIX = 'ANCHOR__'
+COLLISION_COLLECTION_SUFFIX = ' - Collision Meshes'
+OCCLUDER_COLLECTION_SUFFIX = ' - Occluders'
 
 ################################
 ########## IMPORT ##############
 ################################
 
-def import_object_template(context, con_filepath, import_collmesh=True,
+def import_object_template(context, con_filepath, import_collmesh=None,
                            import_rig_mode='AUTO', geom_to_ske_name=None, reload=False,
-                           weld_verts=False, load_backfaces=True, remove_loose_verts=True, reporter=DEFAULT_REPORTER, **kwargs):
+                           weld_verts=False, load_backfaces=True, remove_loose_verts=True,
+                           reporter=DEFAULT_REPORTER,
+                           collision_mesh_mode=IMPORT_MODE_ON,
+                           occluder_mode=IMPORT_MODE_ON,
+                           lod_mode=IMPORT_MODE_ON,
+                           damage_state_mode=IMPORT_MODE_ON,
+                           **kwargs):
+    if import_collmesh is not None:
+        collision_mesh_mode = (
+            IMPORT_MODE_ON if import_collmesh else IMPORT_MODE_OFF
+        )
+    collision_mesh_mode = validate_import_mode(
+        collision_mesh_mode,
+        "collision mesh import mode",
+    )
+    occluder_mode = validate_import_mode(
+        occluder_mode,
+        "occluder import mode",
+    )
+    lod_mode = validate_import_mode(lod_mode, "LOD import mode")
+    damage_state_mode = validate_import_mode(
+        damage_state_mode,
+        "damage state import mode",
+    )
+
     engine = BF2Engine()
     obj_template_manager = engine.get_manager(ObjectTemplate)
     geom_template_manager = engine.get_manager(GeometryTemplate)
@@ -70,7 +105,7 @@ def import_object_template(context, con_filepath, import_collmesh=True,
     geometry_template = geom_template_manager.templates[geometry_template_name]
 
     collmesh_template = None
-    if root_template.collmesh and import_collmesh:
+    if root_template.collmesh and collision_mesh_mode != IMPORT_MODE_OFF:
         collmesh_template_name = root_template.collmesh.lower()
         if collmesh_template_name not in col_template_manager.templates:
             raise ImportException(f"Collision mesh '{collmesh_template_name}' definition via `CollisionManager.createTemplate` not found, must be in the same .con file")
@@ -89,12 +124,15 @@ def import_object_template(context, con_filepath, import_collmesh=True,
                             reporter=reporter,
                             load_backfaces=load_backfaces,
                             remove_loose_verts=remove_loose_verts,
+                            lod_mode=lod_mode,
+                            damage_state_mode=damage_state_mode,
                             **kwargs)
 
     root_geometry_obj = importer.import_mesh(name=root_template.name)
     root_geometry_obj.name = f'{geometry_type}_{root_template.name}'
 
     coll_parts = None
+    collision_collection = None
     if collmesh_template:
         collmesh_filepath = os.path.join(con_dir, 'Meshes', f'{collmesh_template.name}.collisionmesh')
 
@@ -104,6 +142,12 @@ def import_object_template(context, con_filepath, import_collmesh=True,
         # name materials
         for col_material_idx, col_material_name in root_template.col_material_map.items():
             col_materials[col_material_idx].name = col_material_name
+        if collision_mesh_mode == IMPORT_MODE_HIDDEN:
+            collision_collection = get_or_create_collection(
+                context,
+                root_template.name + COLLISION_COLLECTION_SUFFIX,
+                hidden=True,
+            )
 
     for geom_obj in root_geometry_obj.children:
         for lod_obj in geom_obj.children:
@@ -113,13 +157,32 @@ def import_object_template(context, con_filepath, import_collmesh=True,
             else:
                 geom_parts = _split_mesh_by_vertex_groups(context, lod_obj)
 
-            new_lod = _apply_obj_template_data_to_lod(context, root_template, geom_parts, coll_parts, geom_idx, lod_idx)
+            new_lod = _apply_obj_template_data_to_lod(
+                context,
+                root_template,
+                geom_parts,
+                coll_parts,
+                geom_idx,
+                lod_idx,
+                collision_collection=collision_collection,
+            )
             new_lod.parent = geom_obj
             _fix_unassigned_parts(geom_obj, new_lod, geom_parts)
             _delete_hierarchy_if_has_no_meshes(new_lod)
             _cleanup_unused_materials(new_lod)
             if weld_verts:
                 remove_double_verts(new_lod, recursive=True)
+
+    organize_mesh_hierarchy(
+        context,
+        root_geometry_obj,
+        root_template.name,
+        lod_mode=lod_mode,
+        damage_state_mode=damage_state_mode,
+        skip_subtree=_is_colmesh_dummy
+        if collision_mesh_mode == IMPORT_MODE_HIDDEN
+        else None,
+    )
 
     # create anchor
     if root_template.anchor_point:
@@ -128,7 +191,51 @@ def import_object_template(context, con_filepath, import_collmesh=True,
         anchor_obj.location = swap_zy(root_template.anchor_point)
         context.scene.collection.objects.link(anchor_obj)
 
+    if occluder_mode != IMPORT_MODE_OFF:
+        occluder_filepath = _find_companion_occluder(
+            con_filepath,
+            root_template.name,
+        )
+        if occluder_filepath is not None:
+            occluder_obj = import_occluders(
+                context,
+                occluder_filepath,
+                reload=reload,
+            )
+            if occluder_mode == IMPORT_MODE_HIDDEN:
+                occluder_collection = get_or_create_collection(
+                    context,
+                    root_template.name + OCCLUDER_COLLECTION_SUFFIX,
+                    hidden=True,
+                )
+                move_object_to_collection(occluder_obj, occluder_collection)
+
     return root_geometry_obj
+
+
+def _find_companion_occluder(con_filepath, object_template_name):
+    directory = os.path.dirname(con_filepath)
+    con_name = os.path.splitext(os.path.basename(con_filepath))[0]
+    candidate_names = (
+        object_template_name + '.occ',
+        con_name + '.occ',
+    )
+
+    for candidate_name in candidate_names:
+        candidate = os.path.join(directory, candidate_name)
+        if os.path.isfile(candidate):
+            return candidate
+
+    names_by_lowercase = {
+        entry.name.lower(): entry.path
+        for entry in os.scandir(directory)
+        if entry.is_file()
+    }
+    for candidate_name in candidate_names:
+        match = names_by_lowercase.get(candidate_name.lower())
+        if match is not None:
+            return match
+    return None
 
 def parse_geom_type(mesh_obj):
     name_split = mesh_obj.name.split('_')
@@ -177,7 +284,15 @@ def _fix_unassigned_parts(geom_obj, lod_obj, geom_parts):
         child.data.name = n
         child.bf2_object_type = ''
 
-def _apply_obj_template_data_to_lod(context, root_template, geom_parts, coll_parts, geom, lod):
+def _apply_obj_template_data_to_lod(
+    context,
+    root_template,
+    geom_parts,
+    coll_parts,
+    geom,
+    lod,
+    collision_collection=None,
+):
     prfx = MeshImporter.build_mesh_prefix(geom, lod)
     skinned_objects = dict()
 
@@ -276,14 +391,19 @@ def _apply_obj_template_data_to_lod(context, root_template, geom_parts, coll_par
             col_dummy.empty_display_type = 'PLAIN_AXES'
             col_dummy.empty_display_size = 0.1
             col_dummy.hide_render = True
-            context.scene.collection.objects.link(col_dummy)
+            target_collection = (
+                collision_collection
+                if collision_collection is not None
+                else context.scene.collection
+            )
+            target_collection.objects.link(col_dummy)
             col_dummy.parent = geometry_part_obj
             for col_id, col_mesh in coll_parts[col_part_id][geom].items():
                 col_name = f'G{geom}__{obj_template.name}_{COL_SUFFIX}{col_id}'
                 collmesh_obj = bpy.data.objects.new(col_name, col_mesh)
                 col_mesh.name = col_name
                 collmesh_obj.parent = col_dummy
-                context.scene.collection.objects.link(collmesh_obj)
+                target_collection.objects.link(collmesh_obj)
 
         for child in obj_template.children:
             _fix_geom_parts(child.template, geometry_part_obj, child.position, child.rotation)
@@ -1074,9 +1194,9 @@ def _get_nr_of_animted_uvs(mesh_geoms):
         for lod_obj in geom_obj:
             if 'animuv_matrix_index' in lod_obj.data.attributes:
                 animuv_matrix_index = lod_obj.data.attributes['animuv_matrix_index']
-                vert_matrix = len(animuv_matrix_index.data) * [None]
+                vert_matrix = np.empty(len(animuv_matrix_index.data), dtype=np.int32)
                 animuv_matrix_index.data.foreach_get('value', vert_matrix)
-                matrix_set.update(set(vert_matrix))
+                matrix_set.update(vert_matrix.tolist())
     if matrix_set:
         return max(matrix_set)
     else:

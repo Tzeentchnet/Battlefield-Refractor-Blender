@@ -1,3 +1,0 @@
-[submodule "external/texconv_dll"]
-	path = external/texconv_dll
-	url = https://github.com/matyalatte/Texconv-Custom-DLL.git

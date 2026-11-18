@@ -4,8 +4,9 @@ import os.path as path
 import bpy
 import numpy as np
 
-from .... import rectpack
 from ...utils import save_img_as_dds
+from ...utils.image import array_to_image, image_to_array
+from ...utils.rectangle_packer import pack_rectangles
 
 
 def pack_lightmaps(input_dir, output_dir, level_path, dds_fmt='DXT1', atlas_size=(2048, 2048)):
@@ -29,20 +30,18 @@ def pack_lightmaps(input_dir, output_dir, level_path, dds_fmt='DXT1', atlas_size
         file_info[fname] = img
         loaded_images.append(img)
 
-    packer = rectpack.newPacker(rotation=False)
-
-    for fname, img in file_info.items():
-        w, h = img.size
-        packer.add_rect(w, h, fname)
-
-    for _ in range(99):
-        packer.add_bin(*atlas_size)
-
-    packer.pack()
+    atlas_bins = pack_rectangles(
+        [
+            (img.size[0], img.size[1], fname)
+            for fname, img in file_info.items()
+        ],
+        atlas_size,
+        max_bins=99,
+    )
 
     atlas_entries = []
 
-    for atlas_idx, bin in enumerate(packer):
+    for atlas_idx, bin in enumerate(atlas_bins):
         atlas_name = f'LightmapAtlas{atlas_idx}'
         atlas_img = bpy.data.images.new(atlas_name, atlas_size[0], atlas_size[1])
         atlas_pixels = np.zeros((atlas_size[1], atlas_size[0], 4), dtype=np.float32)
@@ -53,7 +52,7 @@ def pack_lightmaps(input_dir, output_dir, level_path, dds_fmt='DXT1', atlas_size
 
             w, h = source_img.size
             src_channels = source_img.channels
-            src_pixels = np.array(source_img.pixels[:]).reshape((h, w, src_channels))
+            src_pixels = image_to_array(source_img)
 
             y, x = rect.y, rect.x
 
@@ -70,8 +69,7 @@ def pack_lightmaps(input_dir, output_dir, level_path, dds_fmt='DXT1', atlas_size
 
             atlas_entries.append((source_name, atlas_idx, atlas_name, x, y, w, h))
 
-        atlas_img.pixels = atlas_pixels.ravel().tolist()
-        atlas_img.update()
+        array_to_image(atlas_img, atlas_pixels)
         save_img_as_dds(atlas_img, path.join(output_dir, f'{atlas_name}.dds'), dds_fmt)
         bpy.data.images.remove(atlas_img)
 

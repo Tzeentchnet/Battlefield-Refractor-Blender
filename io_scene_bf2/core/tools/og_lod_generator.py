@@ -1,15 +1,14 @@
 import bpy # type: ignore
 from mathutils import Vector # type: ignore
 import bmesh # type: ignore
-import tempfile
-import os
 import math
 import numpy as np
-from ... import rectpack
 
 from ..object_template import OrphanedAnchorObject, MeshExporter, parse_geom_type
 from ..utils import next_power_of_2, obj_bounds
 from ..utils.compat import eevee_id
+from ..utils.image import array_to_image, image_to_array
+from ..utils.rectangle_packer import pack_rectangles_power_of_two
 
 class PlaneConfig:
     def __init__(self, plane_axes, camera_rot, dir, flip_uv):
@@ -27,49 +26,16 @@ PLANE_CONFIGS = {
     'BOTTOM': PlaneConfig(('x', 'y'), ( 0, 180,   0), False, flip_uv=True)
 }
 
-def paste_img(dst_img, src_img, x, y):
-    src_width, src_height = src_img.size
-    dst_width, dst_height = dst_img.size
-
-    # its RGBA buffer so every pixel contains 4 values
-    src = np.array(src_img.pixels[:], dtype=np.float32).reshape((src_height, src_width, 4))
-    dst = np.array(dst_img.pixels[:], dtype=np.float32).reshape((dst_height, dst_width, 4))
-
-    # copy, Blender image rows start at the bottom
-    dst[y:y+src_height, x:x+src_width] = src
-
-    dst_img.pixels = dst.ravel().tolist()
-    dst_img.update()
-
 def combine_planes(name, planes, textures):
     plane_dims = [(t.size[0], t.size[1]) for t in textures]
 
-    # pack textures
-    packer = rectpack.newPacker(rotation=False)
-    required_area = 0
-    for i, (x, y) in enumerate(plane_dims):
-        packer.add_rect(x, y, i)
-        required_area += x * y
-
-    # find minimum possible dimenesions
-    width = 0
-    height = 0
-    while True:
-        width = next_power_of_2(width+1)
-        if width * height >= required_area:
-            break
-        height = next_power_of_2(height+1)
-        if height * height >= required_area:
-            break
-
-    packer.add_bin(width, height)
-    packer.pack()
-
-    if len(packer[0]) != len(planes):
-        raise RuntimeError("Packing error")
+    atlas = pack_rectangles_power_of_two(
+        [(width, height, index) for index, (width, height) in enumerate(plane_dims)]
+    )
+    width, height = atlas.width, atlas.height
 
     combined_image = bpy.data.images.new(name='CombinedTexture', width=width, height=height, alpha=True)
-    combined_image.pixels[:] = (0,0,0,0) * width * height # clear image
+    combined_pixels = np.zeros((height, width, 4), dtype=np.float32)
 
     # make combined mesh object
     bm = bmesh.new()
@@ -91,10 +57,13 @@ def combine_planes(name, planes, textures):
     combined_uv.active = True
     obj.data.uv_layers.active = combined_uv
 
-    for rect in packer[0]:
-        # combine textures
+    for rect in atlas:
         image = textures[rect.rid]
-        paste_img(combined_image, image, rect.x, rect.y)
+        source_pixels = image_to_array(image)
+        combined_pixels[
+            rect.y:rect.y + rect.height,
+            rect.x:rect.x + rect.width,
+        ] = source_pixels
 
         # combine uvs
         plane = planes[rect.rid]
@@ -117,6 +86,8 @@ def combine_planes(name, planes, textures):
             u = u * scale_u + offset_u
             v = v * scale_v + offset_v
             combined_uv.data[loop.index].uv = (u, v)
+
+    array_to_image(combined_image, combined_pixels)
 
     # cleanup old
     for image in textures:
@@ -260,13 +231,16 @@ def project_to_plane(obj, plane_name, texture_size):
         layer = scene.view_layers[0].name
         bpy.ops.render.render(layer=layer, scene=scene.name)
 
-        # save and reload image, Render Result can't be used directly as img texture...
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            file_path = os.path.join(tmp_dir, "tmp.png")
-            bpy.data.images["Render Result"].save_render(file_path, scene=scene)
-            image = bpy.data.images.load(file_path)
-            image.name = plane_name
-            image.pack() # pack into .blend file
+        # Render Result cannot be assigned to an image texture, so copy it in bulk.
+        render_result = bpy.data.images["Render Result"]
+        image = bpy.data.images.new(
+            plane_name,
+            width=texture_width,
+            height=texture_height,
+            alpha=True,
+        )
+        array_to_image(image, image_to_array(render_result))
+        image.pack()
 
     except Exception:
         raise

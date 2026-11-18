@@ -2,11 +2,11 @@ import bpy # type: ignore
 from bpy.types import Mesh, Armature, Camera # type: ignore
 from mathutils import Vector # type: ignore
 from ..exceptions import ExportException
-import tempfile
 import os
 import math
 
-from ...directx.texconv import Texconv
+from ...directx.dds_encoder import save_dds
+from .image import image_to_array
 
 class Reporter:
     def __init__(self, report_func=None, report_once=True) -> None:
@@ -194,26 +194,17 @@ def get_power_of_two_int_array(prop_name):
 def is_pow_two(n):
     return (n & (n-1) == 0) and n != 0
 
-FOURCC_TO_DXGI = {
-    'DXT1': 'BC1_UNORM',
-    'DXT3': 'BC2_UNORM',
-    'DXT5': 'BC3_UNORM',
-    'NONE': 'R8G8B8A8_UNORM'
-}
-
 def convert_to_dds(in_file, out_dir, compression):
-    dds_fmt = FOURCC_TO_DXGI[compression]
-    texconv = Texconv()
-    texconv.convert_to_dds(in_file, dds_fmt, out=out_dir, verbose=False)
+    image = bpy.data.images.load(in_file, check_existing=False)
+    try:
+        image.colorspace_settings.name = 'Non-Color'
+        outfile = os.path.join(out_dir, file_name(in_file) + '.dds')
+        save_dds(outfile, image_to_array(image), compression=compression)
+    finally:
+        bpy.data.images.remove(image)
 
 def save_img_as_dds(img, outfile, compression='DXT5', reload=False):
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_file = os.path.join(tmp_dir, file_name(outfile) + '.tga')
-        img.file_format = 'TARGA'
-        img.filepath_raw = tmp_file
-        img.alpha_mode = 'STRAIGHT'
-        img.save(filepath=tmp_file)
-        convert_to_dds(tmp_file, os.path.dirname(outfile), compression)
+    save_dds(outfile, image_to_array(img), compression=compression)
 
 def file_name(fname):
     return os.path.splitext(os.path.basename(fname))[0]

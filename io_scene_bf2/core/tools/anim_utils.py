@@ -8,7 +8,7 @@ from mathutils import Matrix, Vector # type: ignore
 from ..utils import DEFAULT_REPORTER, delete_object_if_exists
 from ..skeleton import (find_animated_weapon_object,
                        ske_weapon_part_ids)
-from ..utils.compat import iter_action_fcurves, pose_bone_hide, SUPPORTS_ACTION_SLOTS
+from ..utils.compat import iter_action_fcurves, pose_bone_hide
 
 AUTO_SETUP_ID = 'bf2_auto_setup' # identifier for custom bones and constraints
 
@@ -36,10 +36,7 @@ class AnimationContext():
         self._frame = self.scene.frame_current
         if self.obj and self.obj.animation_data:
             self._action = self.obj.animation_data.action
-            if SUPPORTS_ACTION_SLOTS:
-                self._action_slot = self.obj.animation_data.action_slot
-            else:
-                self._action_slot = None
+            self._action_slot = self.obj.animation_data.action_slot
         else:
             self._action = self._action_slot = None
         return self
@@ -199,14 +196,11 @@ def _get_mesh_bone_ctrls(rig):
     return mesh_bone_ctrls
 
 def _get_actions(obj):
-    if SUPPORTS_ACTION_SLOTS:
-        for action in bpy.data.actions:
-            for slot in action.slots:
-                if slot.identifier == 'OB' + obj.name:
-                    yield(action, slot)
-                    continue
-    elif obj.animation_data:
-        yield (obj.animation_data.action, None)
+    for action in bpy.data.actions:
+        for slot in action.slots:
+            if slot.identifier == 'OB' + obj.name:
+                yield(action, slot)
+                continue
 
 def _apply_action(context, obj, action, slot):
     if obj.animation_data is None:
@@ -797,7 +791,7 @@ def _get_bone_fcurves(pose_bone, data_path):
         return
 
     action = obj.animation_data.action
-    slot = obj.animation_data.action_slot if SUPPORTS_ACTION_SLOTS else None
+    slot = obj.animation_data.action_slot
     for fcurve in iter_action_fcurves(action, slot=slot):
         if fcurve.data_path.startswith(path):
             yield fcurve
