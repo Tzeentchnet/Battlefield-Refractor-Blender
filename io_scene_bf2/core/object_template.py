@@ -15,7 +15,11 @@ from .bf2.bf2_mesh import BF2Samples
 from .mesh import MeshImporter, MeshExporter, organize_mesh_hierarchy
 from .collision_mesh import CollMeshImporter, CollMeshExporter
 from .occluders import import_occluders
-from .skeleton import find_all_skeletons, find_rig_attached_to_object
+from .skeleton import (
+    find_all_skeletons,
+    find_rig_attached_to_object,
+    import_skeleton,
+)
 
 from .utils import (check_transform, delete_object, check_suffix,
                     check_prefix, remove_double_verts,
@@ -40,6 +44,9 @@ COL_SUFFIX = '_COL'
 ANCHOR_PREFIX = 'ANCHOR__'
 COLLISION_COLLECTION_SUFFIX = ' - Collision Meshes'
 OCCLUDER_COLLECTION_SUFFIX = ' - Occluders'
+BUNDLE_SKELETON_CONSTRAINT = 'BF2 Bundle Skeleton'
+BUNDLE_SKELETON_PROPERTY = 'bf2_bundle_skeleton'
+BUNDLE_BONE_INDEX_PROPERTY = 'bf2_bundle_bone_index'
 
 ################################
 ########## IMPORT ##############
@@ -116,8 +123,10 @@ def import_object_template(context, con_filepath, import_collmesh=None,
     geometry_type = geometry_template.geometry_type
     geometry_filepath = os.path.join(con_dir, 'Meshes', f'{geometry_template.name}.{geometry_type.lower()}')
 
-    # Skeleton import
+    # SkinnedMesh and GenericFirearm skeleton assignment
     geom_to_ske = _get_geom_to_ske(root_template, geometry_type, import_rig_mode, geom_to_ske_name, reporter)
+    if root_template.bundle_skeleton and geometry_type == 'BundledMesh':
+        geom_to_ske = None
 
     importer = MeshImporter(context, geometry_filepath,
                             reload=reload,
@@ -142,6 +151,18 @@ def import_object_template(context, con_filepath, import_collmesh=None,
 
     root_geometry_obj = importer.import_mesh(name=root_template.name)
     root_geometry_obj.name = f'{geometry_type}_{root_template.name}'
+    if root_template.bundle_skeleton:
+        root_geometry_obj[BUNDLE_SKELETON_PROPERTY] = root_template.bundle_skeleton
+    bundle_rig = _get_bundle_skeleton_rig(
+        context,
+        root_template,
+        con_filepath,
+        import_rig_mode,
+        geom_to_ske_name,
+        reload,
+        kwargs.get('texture_paths', ()),
+        reporter,
+    )
 
     coll_parts = None
     collision_collection = None
@@ -161,6 +182,7 @@ def import_object_template(context, con_filepath, import_collmesh=None,
                 hidden=True,
             )
 
+    bundle_bindings = []
     for geom_obj in root_geometry_obj.children:
         for lod_obj in geom_obj.children:
             geom_idx, lod_idx = check_prefix(lod_obj.name, ('G', 'L'))
@@ -177,6 +199,7 @@ def import_object_template(context, con_filepath, import_collmesh=None,
                 geom_idx,
                 lod_idx,
                 collision_collection=collision_collection,
+                bundle_bindings=bundle_bindings,
             )
             new_lod.parent = geom_obj
             _fix_unassigned_parts(geom_obj, new_lod, geom_parts)
@@ -199,6 +222,12 @@ def import_object_template(context, con_filepath, import_collmesh=None,
         if collision_mesh_mode == IMPORT_MODE_HIDDEN
         else None,
     )
+    if bundle_rig:
+        _apply_bundle_skeleton_constraints(
+            bundle_rig,
+            bundle_bindings,
+            reporter,
+        )
 
     # create anchor
     if root_template.anchor_point:
@@ -284,6 +313,138 @@ def _find_companion_occluder(con_filepath, object_template_name):
             return match
     return None
 
+
+def _bundle_skeleton_name(skeleton_path):
+    normalized_path = skeleton_path.replace('\\', '/')
+    return os.path.splitext(os.path.basename(normalized_path))[0]
+
+
+def _resolve_bundle_skeleton_path(
+    con_filepath,
+    skeleton_path,
+    texture_paths=(),
+):
+    normalized_path = skeleton_path.replace('\\', os.sep).replace('/', os.sep)
+    candidates = []
+    if os.path.isabs(normalized_path):
+        candidates.append(normalized_path)
+    else:
+        con_dir = os.path.dirname(con_filepath)
+        candidates.extend((
+            os.path.join(con_dir, normalized_path),
+            os.path.join(con_dir, os.path.basename(normalized_path)),
+        ))
+        candidates.extend(
+            os.path.join(search_path, normalized_path)
+            for search_path in texture_paths
+        )
+
+    checked = set()
+    for candidate in candidates:
+        normalized_candidate = os.path.normcase(os.path.normpath(candidate))
+        if normalized_candidate in checked:
+            continue
+        checked.add(normalized_candidate)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _get_bundle_skeleton_rig(
+    context,
+    root_template,
+    con_filepath,
+    import_rig_mode,
+    geom_to_ske_name,
+    reload,
+    texture_paths,
+    reporter,
+):
+    skeleton_path = root_template.bundle_skeleton
+    if not skeleton_path or import_rig_mode == 'OFF':
+        return None
+
+    rigs = {
+        rig.name.lower(): rig
+        for rig in find_all_skeletons()
+    }
+
+    if import_rig_mode == 'MANUAL':
+        if geom_to_ske_name is None:
+            raise ImportException('geom_to_ske_name missing for MANUAL mode')
+        selected_names = set(geom_to_ske_name.values())
+        if len(selected_names) != 1:
+            reporter.warning(
+                f"ObjectTemplate '{root_template.name}' has a bundle skeleton, "
+                "but Manual rig mode does not select exactly one armature"
+            )
+            return None
+        selected_name = next(iter(selected_names))
+        rig = rigs.get(selected_name.lower())
+        if rig is None:
+            raise ImportException(f"Armature '{selected_name}' not found")
+        return rig
+    if import_rig_mode != 'AUTO':
+        raise ImportException(f'Unhandled import_rig_mode {import_rig_mode}')
+
+    skeleton_name = _bundle_skeleton_name(skeleton_path)
+    existing_rig = rigs.get(skeleton_name.lower())
+    skeleton_file = _resolve_bundle_skeleton_path(
+        con_filepath,
+        skeleton_path,
+        texture_paths,
+    )
+    if existing_rig is not None and (not reload or skeleton_file is None):
+        return existing_rig
+    if skeleton_file is not None:
+        return import_skeleton(
+            context,
+            skeleton_file,
+            reload=reload,
+        )
+
+    reporter.warning(
+        f"Bundle skeleton '{skeleton_path}' not found for "
+        f"ObjectTemplate '{root_template.name}'"
+    )
+    return None
+
+
+def _apply_bundle_skeleton_constraints(rig, bindings, reporter):
+    bone_names = rig.get('bf2_bones')
+    if not bone_names:
+        raise ImportException(
+            f"Armature '{rig.name}' is not a Battlefield 2 skeleton"
+        )
+
+    for obj, bone_index in bindings:
+        if obj.name not in bpy.data.objects:
+            continue
+        if bone_index < 0 or bone_index >= len(bone_names):
+            reporter.warning(
+                f"ObjectTemplate part '{strip_prefix(obj.name)}' references "
+                f"missing bone index {bone_index} in armature '{rig.name}'"
+            )
+            continue
+        bone_name = bone_names[bone_index]
+        bone = rig.data.bones.get(bone_name)
+        if bone is None:
+            reporter.warning(
+                f"ObjectTemplate part '{strip_prefix(obj.name)}' references "
+                f"missing bone '{bone_name}' in armature '{rig.name}'"
+            )
+            continue
+
+        constraint = obj.constraints.get(BUNDLE_SKELETON_CONSTRAINT)
+        if constraint is None:
+            constraint = obj.constraints.new(type='CHILD_OF')
+            constraint.name = BUNDLE_SKELETON_CONSTRAINT
+        constraint.target = rig
+        constraint.subtarget = bone_name
+        constraint.inverse_matrix = (
+            rig.matrix_world @ bone.matrix_local
+        ).inverted()
+
 def parse_geom_type(mesh_obj):
     name_split = mesh_obj.name.split('_')
     gt = name_split[0].lower()
@@ -345,6 +506,7 @@ def _apply_obj_template_data_to_lod(
     geom,
     lod,
     collision_collection=None,
+    bundle_bindings=None,
 ):
     prfx = MeshImporter.build_mesh_prefix(geom, lod)
     skinned_objects = dict()
@@ -430,6 +592,14 @@ def _apply_obj_template_data_to_lod(
         geometry_part_obj.location = part_position
         geometry_part_obj.parent = geom_parent
         geometry_part_obj.bf2_object_type = obj_template.type # custom property
+        if obj_template.bundle_skeleton:
+            geometry_part_obj[BUNDLE_SKELETON_PROPERTY] = obj_template.bundle_skeleton
+        if obj_template.bone_index is not None:
+            geometry_part_obj[BUNDLE_BONE_INDEX_PROPERTY] = obj_template.bone_index
+            if bundle_bindings is not None:
+                bundle_bindings.append(
+                    (geometry_part_obj, obj_template.bone_index)
+                )
         try:
             geometry_part_obj.bf2_object_type_enum = obj_template.type
             geometry_part_obj.bf2_object_type_manual_mode = False
@@ -695,6 +865,8 @@ class GeomPartInfo:
         self.is_root = is_root
         self.name = strip_prefix(obj.name)
         self.bf2_object_type = obj.bf2_object_type
+        self.bundle_skeleton = obj.get(BUNDLE_SKELETON_PROPERTY)
+        self.bone_index = obj.get(BUNDLE_BONE_INDEX_PROPERTY)
         self.matrix_local = obj.matrix_local.copy()
         self.children = []
 
@@ -1031,6 +1203,8 @@ def _create_object_template(geom_part : GeomPartInfo, obj_to_col_part_id, engine
     obj_template = ObjectTemplate(geom_part.bf2_object_type, obj_name, engine)
 
     obj_template.geom_part = geom_part.part_id
+    obj_template.bundle_skeleton = geom_part.bundle_skeleton
+    obj_template.bone_index = geom_part.bone_index
 
     if is_vehicle is None: # root object
         # TODO: no idea how to properly detect whether the exported object

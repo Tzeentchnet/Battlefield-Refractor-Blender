@@ -999,6 +999,8 @@ ObjectTemplate.active <name>
 ObjectTemplate.activeSafe <type> <name>
 ObjectTemplate.geometry <geometry_template>
 ObjectTemplate.geometryPart <index>
+ObjectTemplate.bundleSkeleton <skeleton_path>
+ObjectTemplate.boneIndex <index>
 ObjectTemplate.collisionMesh <collision_template>
 ObjectTemplate.collisionPart <index>
 ObjectTemplate.mapMaterial <index> <name> <unknown>
@@ -1015,7 +1017,9 @@ ObjectTemplate.saveInSeparateFile <0_or_1>
 
 `setPosition` and `setRotation` apply to the most recently added child.
 Collision material mappings connect `.collisionMesh` material IDs to Refractor
-material names.
+material names. For an articulated BundledMesh, `bundleSkeleton` identifies
+the `.ske` armature and `boneIndex` maps a rigid ObjectTemplate part to that
+skeleton's ordered bone list.
 
 ### Geometry and collision templates
 

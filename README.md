@@ -173,20 +173,20 @@ Battlefield 2142 assets:
     </td>
   </tr>
   <tr>
-    <th>Vehicle: PAC battle walker</th>
-    <th>Vehicle: EU battle walker</th>
+    <th>Vehicle: PAC battle walker walk cycle</th>
+    <th>Vehicle: EU battle walker walk cycle</th>
   </tr>
   <tr>
     <td>
       <img
-        src="./docs/images/vehicle-bf2142-pac-battle-walker.png"
-        alt="Imported Battlefield 2142 PAC battle walker ObjectTemplate"
+        src="./docs/images/vehicle-bf2142-pac-battle-walker-walk.gif"
+        alt="Imported Battlefield 2142 PAC battle walker playing its retail walk animation"
         width="640">
     </td>
     <td>
       <img
-        src="./docs/images/vehicle-bf2142-eu-battle-walker.png"
-        alt="Imported Battlefield 2142 EU battle walker ObjectTemplate"
+        src="./docs/images/vehicle-bf2142-eu-battle-walker-walk.gif"
+        alt="Imported Battlefield 2142 EU battle walker playing its retail walk animation"
         width="640">
     </td>
   </tr>
@@ -196,7 +196,9 @@ The character combines the PAC third-person SkinnedMesh, `3p_setup.ske`
 skeleton, and `3p_runforward.baf` action. The freezer exercises the BF2142
 StaticMesh `envmap` fallback. The hover tank and battle walkers demonstrate
 articulated ObjectTemplate import and automatic selection of their complete
-Geom1 exterior states.
+Geom1 exterior states. For both walkers, the importer also loads the declared
+bundle skeleton, constrains each rigid geometry part to its `boneIndex`, and
+plays the original 24 FPS walk action.
 
 ## Installation
 
@@ -419,7 +421,7 @@ project's platform-independent Python and NumPy encoder.
 
 No original Battlefield 2 or Battlefield 2142 mesh, texture, animation, level,
 or other asset files are distributed with this project. Documentation
-screenshots and the animated exemplar were rendered from user-owned retail
+screenshots and animated previews were rendered from user-owned retail
 assets.
 
 ## Credits

@@ -9,7 +9,7 @@ from .bf2.bf2_engine import (BF2Engine,
 
 CACHE_NAMESPACE = hashlib.sha256(__package__.encode('utf-8')).hexdigest()[:12]
 CACHE_FILE_NAME = f".io_scene_bf2_cache_{CACHE_NAMESPACE}"
-CACHE_VERSION = "1.2" # must change when cached templates or archive loading changes
+CACHE_VERSION = "1.3"  # must change when cached templates or archive loading changes
 
 class ModLoader:
     def __init__(self, mod_dir, use_cache=True, engine=None):

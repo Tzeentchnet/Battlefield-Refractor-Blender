@@ -74,11 +74,11 @@ class IMPORT_OT_bf2_object(bpy.types.Operator, ImporterBase, ConMeta):
 
     import_rig_mode : EnumProperty(
         name="Import Rigs",
-        description="Load skin weights and bone transforms from SkinnedMeshes and apply them to the mesh and the armature",
+        description="Load SkinnedMesh rigs and animate BundledMesh ObjectTemplate parts that declare a bundle skeleton",
         default=0,
         items=[
-            ('AUTO', "Auto", "Guess which Geom should be assigned to which skeleton (armature) based on imported ObjectTemplate type", 0),
-            ('MANUAL', "Manual", "Manually define the mapping of each geom to a skeleton (armature)", 1),
+            ('AUTO', "Auto", "Import or reuse declared bundle skeletons and guess SkinnedMesh armature assignments", 0),
+            ('MANUAL', "Manual", "Use the manually selected armature mapping, including one shared armature for bundle skeleton parts", 1),
             ('OFF', "Off", "Skip rig import", 2),
         ]
     ) # type: ignore

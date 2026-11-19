@@ -186,6 +186,8 @@ class ObjectTemplate(Template):
         self.collmesh = None
         self.geom = None
         self.geom_part = -1
+        self.bundle_skeleton = None
+        self.bone_index = None
         self.col_part = 0
         self.has_collision_physics = False
         self.col_material_map = dict()
@@ -230,6 +232,10 @@ class ObjectTemplate(Template):
             f.write(f'ObjectTemplate.geometry {self.geom.name}\n')
         if self.geom_part != -1:
             f.write(f'ObjectTemplate.geometryPart {self.geom_part}\n')
+        if self.bundle_skeleton:
+            f.write(f'ObjectTemplate.bundleSkeleton {self.bundle_skeleton}\n')
+        if self.bone_index is not None:
+            f.write(f'ObjectTemplate.boneIndex {self.bone_index}\n')
 
         for child in self.children:
             f.write(f'ObjectTemplate.addTemplate {child.template_name}\n')
@@ -258,6 +264,14 @@ class ObjectTemplate(Template):
     @console_command
     def geometryPart(self, val):
         self.geom_part = int(val)
+
+    @console_command
+    def bundleSkeleton(self, skeleton):
+        self.bundle_skeleton = skeleton
+
+    @console_command
+    def boneIndex(self, val):
+        self.bone_index = int(val)
 
     @console_command
     def collisionPart(self, val):

@@ -31,9 +31,15 @@ from io_scene_bf2.core.mesh import (
     organize_mesh_hierarchy,
 )
 from io_scene_bf2.core.object_template import (
+    BUNDLE_BONE_INDEX_PROPERTY,
+    BUNDLE_SKELETON_CONSTRAINT,
+    BUNDLE_SKELETON_PROPERTY,
     COLLISION_COLLECTION_SUFFIX,
+    GeomPartInfo,
     NONVIS_PRFX,
     OCCLUDER_COLLECTION_SUFFIX,
+    _apply_bundle_skeleton_constraints,
+    _create_object_template,
     import_object_template,
 )
 from io_scene_bf2.core.road import import_compiled_roads
@@ -478,6 +484,80 @@ def _assert_hidden_import_collections(context):
     bpy.data.collections.remove(damage_collection)
 
 
+def _assert_bundle_skeleton_constraints(context):
+    armature = bpy.data.armatures.new("BundleSkeletonIntegration")
+    rig = bpy.data.objects.new("BundleSkeletonIntegration", armature)
+    context.scene.collection.objects.link(rig)
+    rig["bf2_bones"] = ["root", "leg"]
+    context.view_layer.objects.active = rig
+    rig.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    root_bone = armature.edit_bones.new("root")
+    root_bone.head = (0.0, 0.0, 0.0)
+    root_bone.tail = (0.0, 0.0, 1.0)
+    leg_bone = armature.edit_bones.new("leg")
+    leg_bone.head = (0.5, 0.0, 0.5)
+    leg_bone.tail = (0.5, 0.0, -0.5)
+    leg_bone.parent = root_bone
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    hierarchy_root = bpy.data.objects.new("BundleHierarchyIntegration", None)
+    part = bpy.data.objects.new("G0L0__BundlePartIntegration", None)
+    child = bpy.data.objects.new("BundleChildIntegration", None)
+    for obj in (hierarchy_root, part, child):
+        context.scene.collection.objects.link(obj)
+    part.parent = hierarchy_root
+    part.location = (0.5, 0.0, 0.5)
+    child.parent = part
+    child.location = (0.0, 0.0, -0.5)
+    context.view_layer.update()
+
+    part_bind_matrix = part.matrix_world.copy()
+    child_bind_matrix = child.matrix_world.copy()
+    _apply_bundle_skeleton_constraints(
+        rig,
+        ((part, 1),),
+        SimpleNamespace(warning=lambda _message: None),
+    )
+    context.view_layer.update()
+    if not np.allclose(part.matrix_world, part_bind_matrix, atol=1e-6):
+        raise AssertionError("Bundle skeleton constraint changed the bind pose")
+    constraint = part.constraints.get(BUNDLE_SKELETON_CONSTRAINT)
+    if (
+        constraint is None
+        or constraint.target != rig
+        or constraint.subtarget != "leg"
+    ):
+        raise AssertionError("Bundle skeleton constraint target is incorrect")
+
+    part.bf2_object_type = "SimpleObject"
+    part[BUNDLE_SKELETON_PROPERTY] = "BundleSkeletonIntegration.ske"
+    part[BUNDLE_BONE_INDEX_PROPERTY] = 1
+    exported_template = _create_object_template(
+        GeomPartInfo(0, True, part),
+        {},
+    )
+    if (
+        exported_template.bundle_skeleton
+        != "BundleSkeletonIntegration.ske"
+        or exported_template.bone_index != 1
+    ):
+        raise AssertionError("Bundle skeleton export metadata was not preserved")
+
+    pose_bone = rig.pose.bones["leg"]
+    pose_bone.rotation_mode = "XYZ"
+    pose_bone.rotation_euler.y = 0.5
+    context.view_layer.update()
+    if np.allclose(part.matrix_world, part_bind_matrix, atol=1e-4):
+        raise AssertionError("Bundle skeleton part did not follow its bone")
+    if np.allclose(child.matrix_world, child_bind_matrix, atol=1e-4):
+        raise AssertionError("Bundle skeleton child hierarchy did not follow its part")
+
+    for obj in (child, part, hierarchy_root, rig):
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+
 def _assert_hidden_object_template_import(context, con_filepath):
     root = import_object_template(
         context,
@@ -536,6 +616,7 @@ def main():
         _assert_import_preferences()
         _assert_terrain_settings()
         _assert_hidden_import_collections(bpy.context)
+        _assert_bundle_skeleton_constraints(bpy.context)
 
         mesh = bpy.data.meshes.new("BatchGeometryIntegration")
         set_mesh_geometry(
