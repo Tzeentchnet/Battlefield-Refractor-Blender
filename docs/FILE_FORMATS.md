@@ -1,13 +1,13 @@
 # Refractor 2 File Format Reference
 
-This document describes the Battlefield 2/Refractor 2 asset formats consumed
-or produced by Battlefield Refractor Blender. It is intended for tool authors
-who need an implementation-oriented reference.
+This document describes the Battlefield 2 and Battlefield 2142/Refractor 2
+asset formats consumed or produced by Battlefield Refractor Blender. It is
+intended for tool authors who need an implementation-oriented reference.
 
 This is **not** an official DICE specification. The layouts below are derived
-from the add-on's readers and writers, files encountered in Battlefield 2, and
-the behavior required for round trips through the add-on. Unknown fields keep
-neutral names rather than speculative meanings.
+from the add-on's readers and writers, files encountered in Battlefield 2 and
+Battlefield 2142, and the behavior required for round trips through the
+add-on. Unknown fields keep neutral names rather than speculative meanings.
 
 ## Scope
 
@@ -244,6 +244,11 @@ primarily in their LOD subtype data and material records.
 The reader contains compatibility handling for older versions, including one
 extra discarded `Vec3` after LOD bounds in versions 4 and 6. Writers should use
 the current versions above.
+
+Retail Battlefield 2142 assets validated by this project include StaticMesh
+versions 4, 10, and 11; BundledMesh versions 6 and 10; and SkinnedMesh versions
+4 and 11. Import accepts these older containers, but export writes the current
+versions in the table.
 
 ### Container layout
 
@@ -555,6 +560,8 @@ Implementations:
 
 The exporter writes version `0.10`. Battlefield 2 assets commonly use versions
 `0.9` and `0.10`; those are the interoperability targets for this add-on.
+Retail Battlefield 2142 also contains version `0.8` CollisionMeshes. Their
+older layout is not currently supported by the reader.
 
 ### Top-level hierarchy
 
@@ -1070,9 +1077,15 @@ Implementation:
 
 ## Paths, case, and archives
 
-Battlefield 2 content is usually split between client and server ZIP archives
-and addressed through engine-relative paths such as `Objects/...` and
-`Textures/...`.
+Battlefield 2 and Battlefield 2142 content is usually split between client and
+server ZIP archives and addressed through engine-relative paths such as
+`Objects/...` and `Textures/...`.
+
+Retail Battlefield 2142 commonly mounts archives below category paths such as
+`Objects/Common`, `Objects/StaticObjects`, and `Objects/Vehicles`, rather than
+mounting every archive at exactly `Objects`. Archive lookup must preserve the
+full mount path. Its `*_bp1_*` archives use the same mechanism for Northern
+Strike content.
 
 Interoperable tools should:
 
@@ -1104,7 +1117,7 @@ When implementing a new reader or writer:
 5. Keep index-buffer values local to each visible-mesh material vertex range.
 6. Apply coordinate, winding, UV, and quaternion conversions consistently.
 7. Resolve Refractor paths case-insensitively.
-8. Test against both an original Battlefield 2 asset and a file exported by
-   this add-on.
+8. Test against original Battlefield 2 and Battlefield 2142 assets, plus a
+   file exported by this add-on.
 9. Reject truncated data and unexpected trailing bytes where the format has a
    strict end.

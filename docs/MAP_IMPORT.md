@@ -1,8 +1,9 @@
 # Level and Map Import
 
 Battlefield Refractor Blender can build a complete visual/editor scene from a
-Battlefield 2 level. It reads both untouched packed levels and unpacked mod
-levels without requiring the user to extract retail archives first.
+Battlefield 2 or Battlefield 2142 level. It reads both untouched packed levels
+and unpacked mod levels without requiring the user to extract retail archives
+first.
 
 This workflow imports visual content. It does not convert a level into a
 playable Blender project or recreate the complete Refractor 2 runtime.
@@ -11,29 +12,48 @@ playable Blender project or recreate the complete Refractor 2 runtime.
 
 - Blender 5.2 or newer.
 - Battlefield Refractor Blender installed and enabled.
-- At least one Battlefield 2 mod path configured under
-  `Edit > Preferences > Add-ons > Battlefield Refractor Blender`.
-- The selected level must be inside one of the configured mod directories.
+- A Battlefield 2 or Battlefield 2142 installation configured under
+  `Edit > Preferences > Add-ons > Battlefield Refractor Blender`, or an
+  additional mod directory configured there.
+- The selected level must be inside one of the configured game or mod
+  directories.
 
-For the retail game, configure:
+For the retail games, configure the folder containing the game executable.
+The add-on uses the corresponding base asset directory:
 
 ```text
 <Battlefield 2 installation>/mods/bf2
+<Battlefield 2142 installation>/mods/bf2142
 ```
 
 Add dependency mods as additional paths when a custom level references their
 objects or textures.
 
+### Battlefield 2142
+
+Stock BF2142 levels are under:
+
+```text
+<Battlefield 2142 installation>/mods/bf2142/Levels
+```
+
+BF2142 mounts its object archives below category paths such as
+`Objects\Common` and `Objects\Vehicles`. The importer resolves these nested
+mounts and the retail Northern Strike `*_bp1_*` archives automatically through
+`ClientArchives.con` and `ServerArchives.con`.
+
+See [Battlefield 2142 notes](BF2142.md) for material and re-export caveats.
+
 ## Starting an import
 
-1. Choose `File > Import > BF2 > Level / Map`.
+1. Choose `File > Import > Battlefield 2 / 2142 > Level / Map`.
 2. Select one of the following:
    - the level directory;
    - `client.zip`;
    - `server.zip`; or
    - a `.con` file inside an unpacked level.
 3. Review the import options.
-4. Select **Import Battlefield 2 Level**.
+4. Select **Import Battlefield Level**.
 
 The importer detects packed and unpacked layouts automatically.
 
@@ -53,9 +73,9 @@ visible meshes, and shared textures can be resolved.
 ### Unpacked levels
 
 An unpacked level is detected by the presence of `Heightdata.con`. Resources
-are read from the configured mod paths and the level directory. Individual
-ObjectTemplate workflows may still require neighboring resources to be
-extracted, but complete packed-level import does not.
+are read from the configured game and mod directories and the level directory.
+Individual ObjectTemplate workflows may still require neighboring resources
+to be extracted, but complete packed-level import does not.
 
 ## Import options
 
@@ -344,13 +364,14 @@ map-import workflow.
 
 ### The level importer is disabled
 
-Configure at least one mod directory in the add-on preferences.
+Configure at least one game installation or additional mod directory in the
+add-on preferences.
 
 ### The selected level is rejected
 
-The level must be inside a configured mod path. A packed level must contain
-both `client.zip` and `server.zip`; an unpacked level must contain
-`Heightdata.con`.
+The level must be inside a configured game or mod directory. A packed level
+must contain both `client.zip` and `server.zip`; an unpacked level must
+contain `Heightdata.con`.
 
 ### Objects are missing
 

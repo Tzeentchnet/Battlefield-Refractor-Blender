@@ -2,6 +2,7 @@
 # Table of Contents
 - [Refractor 2 file format reference](FILE_FORMATS.md)
 - [Level and map import guide](MAP_IMPORT.md)
+- [Battlefield 2142 notes](BF2142.md)
 - [Before you start](#before-you-start)
 - [Initial Add-on setup](#initial-add-on-setup)
 - [Animating](#animating)
@@ -31,19 +32,28 @@ Tool authors can use the
 [Refractor 2 file format reference](FILE_FORMATS.md) for the binary and text
 layouts implemented by this add-on.
 
+Battlefield 2142 users should also read
+[Battlefield 2142 notes](BF2142.md) for its retail archive layout, verified
+format versions, material differences, and export caveats.
+
 # Initial Add-on setup
 Before using the add-on you must do the following:
-- Configure path to your BF2 mod (`Edit -> Preferences -> Add-ons -> Battlefield Refractor Blender -> Preferences`). You may define multiple paths e.g. if your mod uses dependencies from the baseline game (`mods/bf2`)
-- Add dependency mod paths when the selected mod references baseline content.
+- Configure the Battlefield 2 and/or Battlefield 2142 installation folder
+  (`Edit -> Preferences -> Add-ons -> Battlefield Refractor Blender ->
+  Preferences`). Their `mods/bf2` and `mods/bf2142` directories are resolved
+  automatically.
+- Add custom or dependency mod paths under **Additional mod directories**.
 - Archive extraction is not required for level import. Extract archives into their corresponding folders only when an individual-file workflow needs neighboring ObjectTemplate, mesh, or texture files on disk.
 - **[Linux only]** To avoid issues on a case sensitive filesystem rename all extracted files to lower case:
     ```sh
     find $MOD_DIR -depth -exec rename 's/(.*)\/([^\/]*)/$1\/\L$2/' {} \;
     ```
 
-After that you may use `File -> Import/Export -> BF2` submenu or drag-and-drop any supported BF2 file into the viewport.
+After that you may use the `File -> Import/Export -> Battlefield 2 / 2142`
+submenu or drag-and-drop any supported Refractor 2 file into the viewport.
 
-The add-on preferences also define defaults for optional import data:
+The add-on preferences also define shared defaults for optional import data.
+The same defaults apply to both games:
 
 | Preference | Off | On | Hidden |
 | --- | --- | --- | --- |

@@ -1,7 +1,8 @@
 # Battlefield Refractor Blender
 
 A Blender 5.2+ toolset for importing, editing, and exporting assets used by
-Battlefield 2 and other games built on DICE's Refractor 2 engine.
+Battlefield 2, Battlefield 2142, and other games built on DICE's Refractor 2
+engine.
 
 > [!IMPORTANT]
 > This repository is a modernized fork of
@@ -35,8 +36,9 @@ vendored `rectpack` source have been removed.
 ## Requirements
 
 - Blender 5.2 LTS or newer.
-- Battlefield 2 or another compatible Refractor 2 asset set.
-- A configured mod directory when resolving related objects and textures.
+- Battlefield 2, Battlefield 2142, or another compatible Refractor 2 asset set.
+- A configured game installation or additional mod directory when resolving
+  related objects and textures.
 
 NumPy is included with Blender 5.2; no separate Python environment or package
 installation is required.
@@ -67,11 +69,14 @@ installation is required.
 
 See the [full user documentation](docs/README.md),
 [level and map import guide](docs/MAP_IMPORT.md),
+[Battlefield 2142 notes](docs/BF2142.md),
 [Battlefield 2 glossary](docs/BF2.md), and
 [Refractor 2 file format reference](docs/FILE_FORMATS.md) for workflow and
 tool-development details.
 
 ## Retail asset examples
+
+### Battlefield 2
 
 These Blender 5.2 renders were produced through the add-on's public import
 operators from retail Battlefield 2 assets:
@@ -125,6 +130,55 @@ The character example combines the third-person skeleton, skinned mesh, and
     width="480">
 </p>
 
+### Battlefield 2142
+
+These Blender 5.2 renders use the same public import APIs with retail
+Battlefield 2142 assets:
+
+<table>
+  <tr>
+    <th>Weapon: PAC assault rifle</th>
+    <th>Character: PAC light soldier</th>
+  </tr>
+  <tr>
+    <td>
+      <img
+        src="./docs/images/weapon-bf2142-pac-assault-rifle.png"
+        alt="Imported Battlefield 2142 PAC assault rifle"
+        width="640">
+    </td>
+    <td>
+      <img
+        src="./docs/images/character-bf2142-pac-light-soldier.png"
+        alt="Imported Battlefield 2142 PAC light soldier with a third-person animation"
+        width="640">
+    </td>
+  </tr>
+  <tr>
+    <th>Prop: freezer</th>
+    <th>Vehicle: PAC hover tank</th>
+  </tr>
+  <tr>
+    <td>
+      <img
+        src="./docs/images/prop-bf2142-freezer.png"
+        alt="Imported Battlefield 2142 freezer StaticMesh"
+        width="640">
+    </td>
+    <td>
+      <img
+        src="./docs/images/vehicle-bf2142-pac-hover-tank.png"
+        alt="Imported Battlefield 2142 PAC hover tank ObjectTemplate"
+        width="640">
+    </td>
+  </tr>
+</table>
+
+The character combines the PAC third-person SkinnedMesh, `3p_setup.ske`
+skeleton, and `3p_runforward.baf` action. The freezer exercises the BF2142
+StaticMesh `envmap` fallback, while the hover tank demonstrates articulated
+ObjectTemplate import and automatic selection of its intact Geom1 state.
+
 ## Installation
 
 ### Install a release
@@ -154,20 +208,41 @@ Install the generated ZIP using the same steps as a release package.
 Before importing complete objects or levels:
 
 1. Open `Edit > Preferences > Add-ons > Battlefield Refractor Blender > Preferences`.
-2. Add the path to each BF2 mod the add-on should search. For the base game,
-   this is normally the `mods/bf2` directory.
-3. Add dependency mods as additional search paths when necessary.
+2. Set the **Battlefield 2** and/or **Battlefield 2142** installation folder.
+   The add-on resolves their `mods/bf2` and `mods/bf2142` asset directories
+   automatically.
+3. Add custom or dependency mods under **Additional mod directories** when
+   necessary.
 
 The level importer reads retail `client.zip`, `server.zip`, and mod object
 archives directly. Extract archives only for workflows that select individual
 ObjectTemplate files and need neighboring files on disk.
 
 Raw mesh, skeleton, animation, collision, and occlusion files can also be
-imported individually from `File > Import > BF2` or by dragging supported files
-into the viewport.
+imported individually from `File > Import > Battlefield 2 / 2142` or by
+dragging supported files into the viewport.
 
 Detailed setup instructions are available in
 [Initial Add-on setup](docs/README.md#initial-add-on-setup).
+
+## Battlefield 2142 notes
+
+For Battlefield 2142, select the installation folder containing `BF2142.exe`;
+the add-on derives `mods/bf2142` automatically. Retail BF2142 object archives
+use nested mounts such as `Objects\Common` and include Northern Strike
+`*_bp1_*` archives. The retail archive configuration files mount these
+automatically.
+
+BF2142 uses the shared import operators and defaults. Older retail mesh
+versions are supported on import, while export writes the add-on's current
+mesh versions. StaticMesh `envmap` techniques import their base material but
+do not reproduce the engine-specific reflection. Retail CollisionMesh version
+`0.8` is not currently supported; versions `0.9` and `0.10` are supported.
+ObjectTemplates driven by `bundleSkeleton` and child `boneIndex` commands do
+not yet apply that skeleton's rest pose.
+
+See [Battlefield 2142 notes](docs/BF2142.md) for verified format versions,
+archive behavior, material differences, and export caveats.
 
 ## Import defaults
 
@@ -188,9 +263,10 @@ selecting a raw `.collisionMesh` or `.occ` file always imports that file.
 
 ## Full map import
 
-Use `File > Import > BF2 > Level / Map`, then select a level directory or its
-`client.zip`/`server.zip`. The importer auto-detects packed and unpacked maps.
-Its default visual import includes:
+Use `File > Import > Battlefield 2 / 2142 > Level / Map`, then select a level
+directory or its `client.zip`/`server.zip`. The importer auto-detects packed
+and unpacked Battlefield 2 and Battlefield 2142 maps. Its default visual
+import includes:
 
 - `StaticObjects.con` placements and bundled child objects;
 - overgrowth placements;
@@ -290,12 +366,12 @@ blender --command extension build --source-dir io_scene_bf2
 The integration test covers add-on registration, batched mesh creation,
 heightmap topology, compiled-road layering, detailed terrain atlas generation,
 DDS encoding, Blender-native DDS loading, and file-based DDS conversion.
-Optional arguments allow testing extracted Battlefield 2 DDS, StaticMesh,
-BundledMesh, CollisionMesh, and ObjectTemplate files.
+Optional arguments allow testing extracted Battlefield 2 or Battlefield 2142
+DDS, StaticMesh, BundledMesh, CollisionMesh, and ObjectTemplate files.
 
 ## Project status and compatibility
 
-- Add-on version: `0.20.0`
+- Add-on version: `0.21.0`
 - Minimum Blender version: `5.2.0`
 - Package type: Blender extension
 - Native runtime dependencies: none
@@ -321,9 +397,10 @@ This project is distributed under the [MIT License](LICENSE).
 Blender 5.2's native image loader handles DDS import. DDS export uses this
 project's platform-independent Python and NumPy encoder.
 
-No original Battlefield 2 mesh, texture, animation, level, or other asset
-files are distributed with this project. Documentation screenshots and the
-animated exemplar were rendered from user-owned retail assets.
+No original Battlefield 2 or Battlefield 2142 mesh, texture, animation, level,
+or other asset files are distributed with this project. Documentation
+screenshots and the animated exemplar were rendered from user-owned retail
+assets.
 
 ## Credits
 
@@ -338,5 +415,6 @@ animated exemplar were rendered from user-owned retail assets.
   [bfmeshview](http://www.bytehazard.com/bfstuff/bfmeshview/)
 - Ason and DeWolfe for testing and feedback
 
-Battlefield 2 and related names are the property of their respective owners.
-This project is not affiliated with or endorsed by Electronic Arts or DICE.
+Battlefield 2, Battlefield 2142, and related names are the property of their
+respective owners. This project is not affiliated with or endorsed by
+Electronic Arts or DICE.
