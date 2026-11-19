@@ -135,59 +135,59 @@ The character example combines the third-person skeleton, skinned mesh, and
 These Blender 5.2 renders use the same public import APIs with retail
 Battlefield 2142 assets:
 
-<table>
+<table width="100%">
   <tr>
-    <th>Weapon: PAC assault rifle</th>
-    <th>Character: PAC light soldier</th>
+    <th width="50%">Weapon: PAC assault rifle</th>
+    <th width="50%">Character: PAC light soldier</th>
   </tr>
   <tr>
-    <td>
+    <td width="50%">
       <img
         src="./docs/images/weapon-bf2142-pac-assault-rifle.png"
         alt="Imported Battlefield 2142 PAC assault rifle"
-        width="640">
+        width="100%">
     </td>
-    <td>
+    <td width="50%">
       <img
         src="./docs/images/character-bf2142-pac-light-soldier.png"
         alt="Imported Battlefield 2142 PAC light soldier with a third-person animation"
-        width="640">
+        width="100%">
     </td>
   </tr>
   <tr>
-    <th>Prop: freezer</th>
-    <th>Vehicle: PAC hover tank</th>
+    <th width="50%">Prop: freezer</th>
+    <th width="50%">Vehicle: PAC hover tank</th>
   </tr>
   <tr>
-    <td>
+    <td width="50%">
       <img
         src="./docs/images/prop-bf2142-freezer.png"
         alt="Imported Battlefield 2142 freezer StaticMesh"
-        width="640">
+        width="100%">
     </td>
-    <td>
+    <td width="50%">
       <img
         src="./docs/images/vehicle-bf2142-pac-hover-tank.png"
         alt="Imported Battlefield 2142 PAC hover tank ObjectTemplate"
-        width="640">
+        width="100%">
     </td>
   </tr>
   <tr>
-    <th>Vehicle: PAC battle walker walk cycle</th>
-    <th>Vehicle: EU battle walker walk cycle</th>
+    <th width="50%">Vehicle: PAC battle walker walk cycle</th>
+    <th width="50%">Vehicle: EU battle walker walk cycle</th>
   </tr>
   <tr>
-    <td>
+    <td width="50%">
       <img
         src="./docs/images/vehicle-bf2142-pac-battle-walker-walk.gif"
         alt="Imported Battlefield 2142 PAC battle walker playing its retail walk animation"
-        width="640">
+        width="100%">
     </td>
-    <td>
+    <td width="50%">
       <img
         src="./docs/images/vehicle-bf2142-eu-battle-walker-walk.gif"
         alt="Imported Battlefield 2142 EU battle walker playing its retail walk animation"
-        width="640">
+        width="100%">
     </td>
   </tr>
 </table>
