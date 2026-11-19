@@ -15,6 +15,7 @@ from ...bf2.bf2_engine import (BF2Engine,
                             Object)
 from ...bf2.bf2_mesh import BF2BundledMesh, BF2StaticMesh, BF2SkinnedMesh, BF2Samples
 from ...bf2.bf2_terrain import BF2Terrain, BF2TerrainException
+from ...game_paths import prioritize_mod_directories
 from ...mod_loader import ModLoader
 from ...utils.compat import set_gn_modifier_input
 from ...material import (setup_material,
@@ -1025,6 +1026,7 @@ def load_level(context, level_dir, use_cache=True,
         for item in mod_dirs
     ):
         mod_dirs.append(mod_dir)
+    mod_dirs = prioritize_mod_directories(mod_dirs, level_dir)
 
     has_level_archives = all(
         path.isfile(path.join(level_dir, archive))

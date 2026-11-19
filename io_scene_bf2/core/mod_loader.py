@@ -9,7 +9,7 @@ from .bf2.bf2_engine import (BF2Engine,
 
 CACHE_NAMESPACE = hashlib.sha256(__package__.encode('utf-8')).hexdigest()[:12]
 CACHE_FILE_NAME = f".io_scene_bf2_cache_{CACHE_NAMESPACE}"
-CACHE_VERSION = "1.1" # must be changed if anything within xxxTemplate data is added/modified
+CACHE_VERSION = "1.2" # must change when cached templates or archive loading changes
 
 class ModLoader:
     def __init__(self, mod_dir, use_cache=True, engine=None):
@@ -119,18 +119,30 @@ class ModLoader:
         file_manager = self.engine.file_manager
         main_console = self.engine.main_console
 
-        files_to_process : Dict[List[str]] = dict()
+        files_to_process : Dict[tuple, List[str]] = dict()
         processed_con_files = set()
 
-        for zipfile in file_manager.getArchives('objects'):
+        for mount_dir, zipfile in file_manager.getArchiveMounts('objects'):
             zipfile = zipfile.lower()
             if levels_only and 'levels/' not in zipfile:
                 continue
             zipObj = file_manager.getZipFile(zipfile)
-            files_to_process[zipfile] = [f for f in zipObj.namelist() if f.endswith('.con') and f not in processed_con_files]
-            processed_con_files.update(files_to_process[zipfile])
+            con_files = []
+            for file in zipObj.namelist():
+                logical_path = (
+                    f"{mount_dir}/{file}".replace('\\', '/').strip('/')
+                )
+                logical_path_key = logical_path.lower()
+                if (
+                    not file.lower().endswith('.con')
+                    or logical_path_key in processed_con_files
+                ):
+                    continue
+                con_files.append(logical_path)
+                processed_con_files.add(logical_path_key)
+            files_to_process[(mount_dir, zipfile)] = con_files
 
-        for zipfile, files_to_process in files_to_process.items():
+        for (_, zipfile), con_files in files_to_process.items():
             zipObj = file_manager.getZipFile(zipfile)
-            for file in files_to_process:
-                main_console.run_file('objects/' + file)
+            for file in con_files:
+                main_console.run_file(file)

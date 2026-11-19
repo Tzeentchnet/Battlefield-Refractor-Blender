@@ -150,9 +150,13 @@ class OBJECT_OT_bf2_gen_og_lod(bpy.types.Operator):
 
         out_path = os.path.join(self.texture_dir, obj_name + '.dds')
         out_path = os.path.normpath(out_path)
-        mod_paths = get_mod_dirs(context)
+        mod_paths = get_mod_dirs(context, out_path)
         if not mod_paths:
-            self.report({"ERROR"}, f'MOD Path must be defined in add-on preferences')
+            self.report(
+                {"ERROR"},
+                "A game installation or additional mod directory must be "
+                "configured in add-on preferences",
+            )
             return {'CANCELLED'}
 
         test_path = Path(out_path)

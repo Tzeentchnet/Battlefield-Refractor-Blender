@@ -328,6 +328,18 @@ def _assert_roundtrip(source, loaded, compression):
 
 
 def _assert_import_preferences():
+    install_directories = tuple(
+        BF2AddonPreferences.bl_rna.properties[name].default
+        for name in (
+            "bf2_install_directory",
+            "bf2142_install_directory",
+        )
+    )
+    if install_directories != ("", ""):
+        raise AssertionError(
+            f"Unexpected game install defaults: {install_directories}"
+        )
+
     modes = tuple(
         BF2AddonPreferences.bl_rna.properties[name].default
         for name in (

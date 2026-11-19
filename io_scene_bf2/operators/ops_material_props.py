@@ -156,7 +156,13 @@ class MESH_PT_bf2_materials(bpy.types.Panel):
             mod_paths = get_mod_dirs(context)
             if not mod_paths:
                 col = layout.column()
-                col.label(text='WARNING: Mod Path is not defined in add-on preferences, textures will not load', icon='ERROR')
+                col.label(
+                    text=(
+                        "WARNING: No game installation or additional mod "
+                        "directory is configured; textures will not load"
+                    ),
+                    icon='ERROR',
+                )
 
             col = layout.column()
             col.operator(MESH_OT_bf2_apply_material.bl_idname, text="Apply Material")

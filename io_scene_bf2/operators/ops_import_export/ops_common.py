@@ -8,7 +8,7 @@ from ...core.exceptions import ImportException, ExportException
 
 class IMPORT_MT_bf2_submenu(bpy.types.Menu):
     bl_idname = "IMPORT_MT_bf2_submenu"
-    bl_label = "Battlefield 2"
+    bl_label = "Battlefield 2 / 2142"
 
     DRAW_CALLBACKS = list()
 
@@ -25,11 +25,14 @@ class IMPORT_MT_bf2_submenu(bpy.types.Menu):
             cb(self.layout)
 
 def menu_func_import(self, context):
-    self.layout.menu(IMPORT_MT_bf2_submenu.bl_idname, text="BF2")
+    self.layout.menu(
+        IMPORT_MT_bf2_submenu.bl_idname,
+        text="Battlefield 2 / 2142",
+    )
 
 class EXPORT_MT_bf2_submenu(bpy.types.Menu):
     bl_idname = "EXPORT_MT_bf2_submenu"
-    bl_label = "Battlefield 2"
+    bl_label = "Battlefield 2 / 2142"
 
     DRAW_CALLBACKS = list()
 
@@ -46,7 +49,10 @@ class EXPORT_MT_bf2_submenu(bpy.types.Menu):
             cb(self.layout)
 
 def menu_func_export(self, context):
-    self.layout.menu(EXPORT_MT_bf2_submenu.bl_idname, text="BF2")
+    self.layout.menu(
+        EXPORT_MT_bf2_submenu.bl_idname,
+        text="Battlefield 2 / 2142",
+    )
 
 # ------------------------------------------------------------------
 

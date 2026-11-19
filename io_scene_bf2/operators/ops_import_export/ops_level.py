@@ -13,10 +13,11 @@ from .ops_common import ImporterBase
 
 class IMPORT_OT_bf2_level(bpy.types.Operator, ImporterBase):
     bl_idname = 'bf2.level_import'
-    bl_label = 'Import Battlefield 2 Level'
+    bl_label = 'Import Battlefield Level'
     bl_description = (
-        'Import a packed or unpacked Battlefield 2 level, including terrain, '
-        'static objects, overgrowth, compiled roads, water, and lighting'
+        'Import a packed or unpacked Battlefield 2 or Battlefield 2142 level, '
+        'including terrain, static objects, overgrowth, compiled roads, '
+        'water, and lighting'
     )
     FILE_DESC = 'Level / Map'
 
@@ -81,8 +82,8 @@ class IMPORT_OT_bf2_level(bpy.types.Operator, ImporterBase):
     @classmethod
     def poll(cls, context):
         cls.poll_message_set(
-            'At least one Battlefield 2 mod path must be configured in '
-            'add-on preferences'
+            'Configure a Battlefield 2 or Battlefield 2142 installation, or '
+            'an additional mod directory, in add-on preferences'
         )
         return bool(get_mod_dirs(context))
 
@@ -112,13 +113,14 @@ class IMPORT_OT_bf2_level(bpy.types.Operator, ImporterBase):
                 "or a file inside one"
             )
 
-        mod_dirs = get_mod_dirs(context)
+        mod_dirs = get_mod_dirs(context, level_dir)
         if not any(
             Path(level_dir).resolve().is_relative_to(Path(mod_dir).resolve())
             for mod_dir in mod_dirs
         ):
             self.abort(
-                f"Level '{level_dir}' is not inside a configured mod path"
+                f"Level '{level_dir}' is not inside a configured game or mod "
+                "directory"
             )
 
         result = load_level(

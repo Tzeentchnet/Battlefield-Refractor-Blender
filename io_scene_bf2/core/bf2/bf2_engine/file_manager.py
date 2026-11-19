@@ -87,22 +87,46 @@ class FileManager:
         return self._archive_to_zip[archive]
 
     def getArchives(self, mount_dir=''):
+        return [
+            archive
+            for _, archive in self.getArchiveMounts(mount_dir)
+        ]
+
+    def getArchiveMounts(self, mount_dir=''):
         if mount_dir:
-            if mount_dir in self._mounted_archives:
-                return self._mounted_archives[mount_dir]
-            else:
-                return []
-        else:
-            return [item for _, v in self._mounted_archives.items() for item in v]
+            mount_dir = self._normalize_mount_dir(mount_dir)
+        return [
+            (mounted_dir, archive)
+            for mounted_dir, archives in self._mounted_archives.items()
+            if (
+                not mount_dir
+                or self._is_mounted_below(mounted_dir, mount_dir)
+            )
+            for archive in archives
+        ]
     
     def getPaths(self, mount_dir=''):
         if mount_dir:
-            if mount_dir in self._mounted_paths:
-                return self._mounted_paths[mount_dir]
-            else:
-                return []
+            mount_dir = self._normalize_mount_dir(mount_dir)
+            return [
+                mounted_path
+                for mounted_dir, paths in self._mounted_paths.items()
+                if self._is_mounted_below(mounted_dir, mount_dir)
+                for mounted_path in paths
+            ]
         else:
             return [item for _, v in self._mounted_paths.items() for item in v]
+
+    @staticmethod
+    def _normalize_mount_dir(mount_dir):
+        return mount_dir.replace('\\', '/').strip('/').lower()
+
+    @staticmethod
+    def _is_mounted_below(mounted_dir, parent_dir):
+        return (
+            mounted_dir == parent_dir
+            or mounted_dir.startswith(parent_dir + '/')
+        )
 
     def findInArchive(self, archive, fn):
         try:
@@ -154,8 +178,9 @@ class FileManager:
         # check if absolute path: e.g. objects/blah/../blah
 
         for mount_dir, archives in self._mounted_archives.items():
-            if filepath.lower().startswith(mount_dir):
-                fpath = filepath[len(mount_dir):][1:]
+            filepath_lower = filepath.lower()
+            if self._is_mounted_below(filepath_lower, mount_dir):
+                fpath = filepath[len(mount_dir):].lstrip('/')
                 for archive in archives:                    
                     archived_fname = self.findInArchive(archive, fpath)
                     if archived_fname is not None:
@@ -167,8 +192,9 @@ class FileManager:
                 break
 
         for mount_dir, paths in self._mounted_paths.items():
-            if filepath.lower().startswith(mount_dir):
-                fpath = filepath[len(mount_dir):][1:]
+            filepath_lower = filepath.lower()
+            if self._is_mounted_below(filepath_lower, mount_dir):
+                fpath = filepath[len(mount_dir):].lstrip('/')
                 for _path in paths:
                     _file = find_file(path.join(_path, fpath))
                     if not _file:
@@ -203,7 +229,7 @@ class FileManager:
             if not path.isdir(dirpathfull):
                 continue
             # print('[FileManager] Mounting path {}'.format(dirpathfull))
-            k = mount_dir.lower()
+            k = self._normalize_mount_dir(mount_dir)
             if k not in self._mounted_paths:
                 self._mounted_paths[k] = list()
             self._mounted_paths[k].append(dirpathfull)
@@ -217,7 +243,7 @@ class FileManager:
             if not zipfullpath:
                 continue
             # print('[FileManager] Mounting archive {}'.format(archive))
-            k = mount_dir.lower()
+            k = self._normalize_mount_dir(mount_dir)
             if k not in self._mounted_archives:
                 self._mounted_archives[k] = list()
             self._mounted_archives[k].append(archive)

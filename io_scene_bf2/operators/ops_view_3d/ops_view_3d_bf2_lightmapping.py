@@ -219,7 +219,10 @@ class VIEW3D_OT_bf2_load_level(bpy.types.Operator, ImportHelper):
 
     @classmethod
     def poll(cls, context):
-        cls.poll_message_set("Mod path must be defined in addon preferences")
+        cls.poll_message_set(
+            "A game installation or additional mod directory must be "
+            "configured in add-on preferences"
+        )
         return get_mod_dirs(context)
 
     def execute(self, context):
@@ -230,7 +233,7 @@ class VIEW3D_OT_bf2_load_level(bpy.types.Operator, ImportHelper):
         filepath = self.filepath.rstrip('/').rstrip('\\')
 
         level_path = None # relative path!
-        mod_dirs = get_mod_dirs(context)
+        mod_dirs = get_mod_dirs(context, self.filepath)
         test_path = Path(self.filepath)
         for mod_path in mod_dirs:
             try:

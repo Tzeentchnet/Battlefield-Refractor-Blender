@@ -342,23 +342,60 @@ class MeshImporter:
             else:
                 material = bpy.data.materials.new(mat_name)
 
-                # validate fx file, just warn and ignore (the engine ignores it as well)
+                material_mesh_type = type(bf2_mesh)
                 try:
-                    if _MESH_TYPES[bf2_mat.fxfile[:-3].upper()] != type(bf2_mesh):
-                        self.reporter.warning(f"'{name}': Material shader '{bf2_mat.fxfile}' doesn't match the mesh type, ignoring")
+                    declared_mesh_type = _MESH_TYPES[
+                        bf2_mat.fxfile[:-3].upper()
+                    ]
                 except (IndexError, KeyError):
-                    raise self.reporter.warning(f"'{name}': Material shader '{bf2_mat.fxfile}' is invalid, ignoring")
+                    self.reporter.warning(
+                        f"'{name}': Material shader '{bf2_mat.fxfile}' is "
+                        "invalid, using the mesh type"
+                    )
+                else:
+                    if declared_mesh_type != material_mesh_type:
+                        if (
+                            material_mesh_type == BF2StaticMesh
+                            and declared_mesh_type == BF2BundledMesh
+                        ):
+                            self.reporter.warning(
+                                f"'{name}': StaticMesh material uses "
+                                f"'{bf2_mat.fxfile}', using the declared "
+                                "material shader"
+                            )
+                            material_mesh_type = declared_mesh_type
+                        else:
+                            self.reporter.warning(
+                                f"'{name}': Material shader "
+                                f"'{bf2_mat.fxfile}' doesn't match the mesh "
+                                "type, ignoring"
+                            )
 
-                material.bf2_shader = [mt_name for mt_name, mt in _MESH_TYPES.items() if mt == type(bf2_mesh)][0]
+                material.bf2_shader = [
+                    mt_name
+                    for mt_name, mesh_type in _MESH_TYPES.items()
+                    if mesh_type == material_mesh_type
+                ][0]
 
                 is_basendetail = False
                 material.bf2_technique = bf2_mat.technique
                 if material.bf2_shader == 'STATICMESH':
-                    if 'parallaxdetail' in material.bf2_technique:
+                    unsupported_suffixes = (
+                        ('parallaxdetail', 'parallax detail'),
+                        ('envmap', 'environment map'),
+                    )
+                    for suffix, description in unsupported_suffixes:
+                        if not material.bf2_technique.lower().endswith(suffix):
+                            continue
                         if not self.silent:
-                            self.reporter.warning(f"'{name}': Technique 'parallaxdetail' is not supported and will be ignored")
-                        material.bf2_technique = material.bf2_technique.replace('parallaxdetail', '')
-                    elif material.bf2_technique.lower() in ('basendetail', 'basenbase'):
+                            self.reporter.warning(
+                                f"'{name}': StaticMesh {description} is not "
+                                "supported and will be ignored"
+                            )
+                        material.bf2_technique = (
+                            material.bf2_technique[:-len(suffix)]
+                        )
+                    if material.bf2_technique.lower() in ('basendetail', 'basenbase'):
                         # XXX: BF2 shaders seem to also support 'BaseNBase' (base with normal maps), I've never seen it used anywhere
                         # 'BaseNDetail' is used on some meshes though and internally it gets changed to 'BaseNBase' by the game
                         # but since it is rarely used there is no point in supporting it for now

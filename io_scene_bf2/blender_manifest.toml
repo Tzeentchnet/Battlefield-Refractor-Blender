@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "io_scene_bf2"
-version = "0.20.0"
+version = "0.21.0"
 name = "Battlefield Refractor Blender"
 tagline = "Import and export asset files for DICE's Refractor 2 engine"
 maintainer = "Tzeentchnet"

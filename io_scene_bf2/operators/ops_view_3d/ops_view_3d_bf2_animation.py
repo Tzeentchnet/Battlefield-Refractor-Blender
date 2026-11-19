@@ -138,14 +138,14 @@ def _find_matching_soldier_animation(directory, anim_filepath):
 
 def _parse_animation_system(context, inc_filepath):
     engine = BF2Engine()
-    engine.file_manager.root_dirs = get_mod_dirs(context)
+    engine.file_manager.root_dirs = get_mod_dirs(context, inc_filepath)
     engine.main_console.run_file(inc_filepath)
     manager = engine.get_manager(Animation)
     return list(manager.templates.values()) if manager else []
 
-def _resolve_weapon_anim_path(context, anim_path):
+def _resolve_weapon_anim_path(context, anim_path, source_path=""):
     rel = anim_path.replace('\\', '/').lstrip('/')
-    for mod_dir in get_mod_dirs(context):
+    for mod_dir in get_mod_dirs(context, source_path):
         candidate = os.path.normpath(os.path.join(mod_dir, *rel.split('/')))
         if os.path.isfile(candidate):
             return candidate
@@ -159,7 +159,11 @@ def _on_weapon_anim_system_update(self, context):
     animations = _parse_animation_system(context, self.weapon_anim_system_file)
     if not animations:
         return
-    anim_file = _resolve_weapon_anim_path(context, animations[0].path)
+    anim_file = _resolve_weapon_anim_path(
+        context,
+        animations[0].path,
+        self.weapon_anim_system_file,
+    )
     if not anim_file:
         return
     if _anim_path_is_3p(anim_file):
@@ -189,24 +193,39 @@ def _set_default_3p_settings(self, context, anim_filepath):
     else:
         self.soldier_anim_dir = _get_default_soldier_3p_anim_dir(self, context)
 
+def _get_animation_source_path(self):
+    if self.import_method == 'SINGLE':
+        return self.weapon_anim_file
+    if self.import_method == 'DIRECTORY':
+        return self.weapon_anim_dir
+    return self.weapon_anim_system_file
+
 def _get_default_soldier_3p_anim_dir(self, context):
-    for mod_dir in get_mod_dirs(context):
+    for mod_dir in get_mod_dirs(context, _get_animation_source_path(self)):
         dir = os.path.join(mod_dir, 'objects', 'soldiers', 'common', 'animations', '3p')
         if os.path.isdir(dir):
             return dir
     return ''
 
-def _get_default_soldier_skeleton(context, fname):
-    for mod_dir in get_mod_dirs(context):
+def _get_default_soldier_skeleton(self, context, fname):
+    for mod_dir in get_mod_dirs(context, _get_animation_source_path(self)):
         file = os.path.join(mod_dir, 'objects', 'soldiers', 'common', 'animations', fname)
         if os.path.isfile(file):
             return file
 
 def _set_default_soldier_1p_skeleton(self, context):
-    self.ske_file = _get_default_soldier_skeleton(context, '1p_setup.ske')
+    self.ske_file = _get_default_soldier_skeleton(
+        self,
+        context,
+        '1p_setup.ske',
+    )
 
 def _set_default_soldier_3p_skeleton(self, context):
-    self.ske_file = _get_default_soldier_skeleton(context, '3p_setup.ske')
+    self.ske_file = _get_default_soldier_skeleton(
+        self,
+        context,
+        '3p_setup.ske',
+    )
 
 def _set_weapon_mesh(self, anim_filepath):
     if not anim_filepath:
@@ -251,7 +270,7 @@ def _find_meshes_dir_recursive(self, dir):
                 return _find_meshes_dir_recursive(self, fullpath)
 
 def _set_default_soldier_mesh(self, context):
-    for mod_dir in get_mod_dirs(context):
+    for mod_dir in get_mod_dirs(context, _get_animation_source_path(self)):
         soldiers_dir = os.path.join(mod_dir, 'objects', 'soldiers')
         meshes_dir = _find_meshes_dir_recursive(self, soldiers_dir)
         if not meshes_dir:
@@ -318,6 +337,7 @@ class VIEW3D_OT_bf2_animation_wizard(bpy.types.Operator):
         if self.import_method == 'SINGLE':
             if not self.weapon_anim_file or not os.path.isfile(self.weapon_anim_file):
                 return
+            _set_default_soldier_mesh(self, context)
             anim_file = os.path.basename(self.weapon_anim_file)
             s = anim_file.split('_')
             if len(s) < 3:
@@ -332,6 +352,7 @@ class VIEW3D_OT_bf2_animation_wizard(bpy.types.Operator):
         elif self.import_method == 'DIRECTORY':
             if not self.weapon_anim_dir or not os.path.isdir(self.weapon_anim_dir):
                 return
+            _set_default_soldier_mesh(self, context)
             anim_dir = os.path.basename(self.weapon_anim_dir.replace('\\', '/').rstrip('/')).lower()
             anim_file = _find_file(self.weapon_anim_dir, lambda f: f.endswith('.baf') and len(f.split('_')) >= 3)
             if anim_dir == '1p':
@@ -342,6 +363,12 @@ class VIEW3D_OT_bf2_animation_wizard(bpy.types.Operator):
                 return
             _set_weapon_mesh(self, anim_file)
         else:
+            if (
+                not self.weapon_anim_system_file
+                or not os.path.isfile(self.weapon_anim_system_file)
+            ):
+                return
+            _set_default_soldier_mesh(self, context)
             _on_weapon_anim_system_update(self, context)
 
     import_method: EnumProperty(
@@ -482,7 +509,11 @@ class VIEW3D_OT_bf2_animation_wizard(bpy.types.Operator):
                     self.report({"ERROR"}, "No animations found in the animation system file")
                     return {'CANCELLED'}
                 for anim in animations:
-                    path = _resolve_weapon_anim_path(context, anim.path)
+                    path = _resolve_weapon_anim_path(
+                        context,
+                        anim.path,
+                        self.weapon_anim_system_file,
+                    )
                     if not path or not os.path.isfile(path):
                         self.report({"WARNING"}, f"Animation file '{anim.path}' not found, skipping")
                         continue
@@ -546,7 +577,10 @@ class VIEW3D_OT_bf2_animation_wizard(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        cls.poll_message_set("A mod directory must be defined for this feature")
+        cls.poll_message_set(
+            "A game installation or additional mod directory must be "
+            "configured for this feature"
+        )
         return bool(get_mod_dirs(context))
 
 class VIEW3D_OT_bf2_anim_change_parent(bpy.types.Operator):

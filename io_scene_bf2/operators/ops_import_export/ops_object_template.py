@@ -169,7 +169,7 @@ class IMPORT_OT_bf2_object(bpy.types.Operator, ImporterBase, ConMeta):
         col.prop(self, "use_free_normals")
 
     def _execute(self, context):
-        mod_paths = get_mod_dirs(context)
+        mod_paths = get_mod_dirs(context, self.filepath)
 
         geom_to_ske = None
         if self.import_rig_mode == 'MANUAL':
@@ -413,7 +413,7 @@ class EXPORT_OT_bf2_object(bpy.types.Operator, ExporterBase, ConMeta):
             return False
 
     def _execute(self, context):
-        mod_paths = get_mod_dirs(context)
+        mod_paths = get_mod_dirs(context, self.filepath)
         root = find_root(context.view_layer.objects.active)
         samples_size = self.samples_size if self.export_samples else None
 

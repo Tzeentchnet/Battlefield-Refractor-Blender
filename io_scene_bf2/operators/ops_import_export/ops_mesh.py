@@ -152,7 +152,7 @@ class MeshImportBase(ImporterBase):
         return None # will pick based on file ext
 
     def _execute(self, context):
-        mod_paths = get_mod_dirs(context)
+        mod_paths = get_mod_dirs(context, self.filepath)
         kwargs = {}
         if self.only_selected_lod:
             kwargs['geom'] = self.geom
@@ -237,7 +237,7 @@ class MeshExportBase(ExporterBase):
         raise NotImplementedError()
 
     def _execute(self, context):
-        mod_paths = get_mod_dirs(context)
+        mod_paths = get_mod_dirs(context, self.filepath)
         root = find_root(context.view_layer.objects.active)
         export_mesh(root, self.filepath,
                     mesh_type=self.mesh_type(),
