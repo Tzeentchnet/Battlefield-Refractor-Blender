@@ -172,12 +172,31 @@ Battlefield 2142 assets:
         width="640">
     </td>
   </tr>
+  <tr>
+    <th>Vehicle: PAC battle walker</th>
+    <th>Vehicle: EU battle walker</th>
+  </tr>
+  <tr>
+    <td>
+      <img
+        src="./docs/images/vehicle-bf2142-pac-battle-walker.png"
+        alt="Imported Battlefield 2142 PAC battle walker ObjectTemplate"
+        width="640">
+    </td>
+    <td>
+      <img
+        src="./docs/images/vehicle-bf2142-eu-battle-walker.png"
+        alt="Imported Battlefield 2142 EU battle walker ObjectTemplate"
+        width="640">
+    </td>
+  </tr>
 </table>
 
 The character combines the PAC third-person SkinnedMesh, `3p_setup.ske`
 skeleton, and `3p_runforward.baf` action. The freezer exercises the BF2142
-StaticMesh `envmap` fallback, while the hover tank demonstrates articulated
-ObjectTemplate import and automatic selection of its intact Geom1 state.
+StaticMesh `envmap` fallback. The hover tank and battle walkers demonstrate
+articulated ObjectTemplate import and automatic selection of their complete
+Geom1 exterior states.
 
 ## Installation
 
@@ -238,8 +257,9 @@ versions are supported on import, while export writes the add-on's current
 mesh versions. StaticMesh `envmap` techniques import their base material but
 do not reproduce the engine-specific reflection. Retail CollisionMesh version
 `0.8` is not currently supported; versions `0.9` and `0.10` are supported.
-ObjectTemplates driven by `bundleSkeleton` and child `boneIndex` commands do
-not yet apply that skeleton's rest pose.
+When multiple BundledMesh Geoms cover the same ObjectTemplate parts, the
+importer prefers the candidate with more LODs. This selects the complete
+four-LOD Geom1 exterior for the PAC and EU battle walkers.
 
 See [Battlefield 2142 notes](docs/BF2142.md) for verified format versions,
 archive behavior, material differences, and export caveats.

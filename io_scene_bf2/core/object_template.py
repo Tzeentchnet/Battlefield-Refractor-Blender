@@ -250,7 +250,14 @@ def _select_primary_geom_index(root_template, bf2_mesh):
                     if vertex.blendindices
                 )
         candidate_parts.append(parts)
-    return select_primary_index(required_parts, candidate_parts)
+    return select_primary_index(
+        required_parts,
+        candidate_parts,
+        candidate_priorities=[
+            len(geom.lods)
+            for geom in bf2_mesh.geoms
+        ],
+    )
 
 
 def _find_companion_occluder(con_filepath, object_template_name):

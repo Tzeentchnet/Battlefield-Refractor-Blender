@@ -79,6 +79,32 @@ class ImportSettingsTests(unittest.TestCase):
             0,
         )
 
+    def test_uses_priority_to_break_equal_part_coverage(self):
+        self.assertEqual(
+            import_settings.select_primary_index(
+                {1, 2},
+                ({0, 1, 2}, {0, 1, 2}),
+                candidate_priorities=(1, 4),
+            ),
+            1,
+        )
+        self.assertEqual(
+            import_settings.select_primary_index(
+                set(),
+                ({0}, {0, 1}),
+                candidate_priorities=(1, 4),
+            ),
+            0,
+        )
+
+    def test_rejects_mismatched_candidate_priorities(self):
+        with self.assertRaisesRegex(ValueError, "match the candidate count"):
+            import_settings.select_primary_index(
+                {1},
+                ({0}, {0, 1}),
+                candidate_priorities=(1,),
+            )
+
     def test_hidden_imports_and_hides_secondary_indices(self):
         self.assertTrue(
             import_settings.should_import_index(

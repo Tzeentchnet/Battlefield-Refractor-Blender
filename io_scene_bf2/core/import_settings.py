@@ -41,13 +41,26 @@ def should_hide_index(index, mode, primary_index=0):
     return index != primary_index and mode == IMPORT_MODE_HIDDEN
 
 
-def select_primary_index(required_parts, candidate_parts):
+def select_primary_index(
+    required_parts,
+    candidate_parts,
+    candidate_priorities=None,
+):
     if not candidate_parts:
         raise ValueError("At least one import candidate is required")
+    if candidate_priorities is None:
+        candidate_priorities = (0,) * len(candidate_parts)
+    elif len(candidate_priorities) != len(candidate_parts):
+        raise ValueError(
+            "Import candidate priorities must match the candidate count"
+        )
     required_parts = frozenset(required_parts)
     if not required_parts:
         return 0
     return max(
         range(len(candidate_parts)),
-        key=lambda index: len(required_parts.intersection(candidate_parts[index])),
+        key=lambda index: (
+            len(required_parts.intersection(candidate_parts[index])),
+            candidate_priorities[index],
+        ),
     )
