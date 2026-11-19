@@ -21,7 +21,8 @@ from .utils import (check_transform, delete_object,
                     DEFAULT_REPORTER)
 from .skeleton import (ske_get_bone_rot,
                        ske_weapon_part_ids,
-                       find_rig_attached_to_object)
+                       find_rig_attached_to_object,
+                       get_bf2_bone_names)
 from .material import (setup_material,
                             get_staticmesh_technique_from_maps, 
                             get_staticmesh_uv_channels,
@@ -594,7 +595,7 @@ class MeshImporter:
         if not self.bf2_mesh.has_blend_weight():
             return
 
-        ske_bones = rig['bf2_bones']
+        ske_bones = get_bf2_bone_names(rig)
         armature = rig.data
 
         self.context.view_layer.objects.active = rig
@@ -1086,7 +1087,9 @@ class MeshExporter:
                     self.reporter.warning(f"{lod_obj.name}: Skeleton object not found, exporting LOD without weights info.\n"
                                           f" You can disregard this warning for dropkits; otherwise, make sure the mesh has the 'Armature' modifier and the 'Object' in the modifier settings points to a BF2 skeleton")
             else:
-                for bone_id, ske_bone in enumerate(rig['bf2_bones']):
+                for bone_id, ske_bone in enumerate(
+                    get_bf2_bone_names(rig)
+                ):
                     bone_obj = rig.data.bones[ske_bone]
                     m = bone_obj.matrix_local.copy() @ ske_get_bone_rot(bone_obj).inverted()
                     bone_to_matrix[bone_obj.name] = conv_blender_to_bf2(m)

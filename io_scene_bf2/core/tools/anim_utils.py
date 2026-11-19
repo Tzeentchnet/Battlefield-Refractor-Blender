@@ -7,6 +7,7 @@ import enum
 from mathutils import Matrix, Vector # type: ignore
 from ..utils import DEFAULT_REPORTER, delete_object_if_exists
 from ..skeleton import (find_animated_weapon_object,
+                       get_bf2_bone_names,
                        ske_weapon_part_ids)
 from ..utils.compat import iter_action_fcurves, pose_bone_hide
 
@@ -187,7 +188,7 @@ def _get_active_mesh_bones(rig):
     return mesh_bones
 
 def _get_mesh_bone_ctrls(rig):
-    ske_bones = rig['bf2_bones']
+    ske_bones = get_bf2_bone_names(rig)
     mesh_bone_ids = ske_weapon_part_ids(rig)
     mesh_bone_ctrls = set()
     for i, ske_bone in enumerate(ske_bones):
@@ -854,7 +855,7 @@ def reparent_bones(context, rig, target_bones, parent_bone, reporter=DEFAULT_REP
         else:
             parent_pose_bone = None
 
-        if target_bone in rig['bf2_bones']:
+        if target_bone in get_bf2_bone_names(rig):
             reporter.warning("Changing parent of the BF2 skeleton bone, this will mess up your export!")
 
         _reparent_keyframes(context, target_pose_bone, parent_pose_bone)

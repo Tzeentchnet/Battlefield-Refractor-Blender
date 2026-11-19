@@ -18,6 +18,7 @@ from .occluders import import_occluders
 from .skeleton import (
     find_all_skeletons,
     find_rig_attached_to_object,
+    get_bf2_bone_names,
     import_skeleton,
 )
 
@@ -411,7 +412,7 @@ def _get_bundle_skeleton_rig(
 
 
 def _apply_bundle_skeleton_constraints(rig, bindings, reporter):
-    bone_names = rig.get('bf2_bones')
+    bone_names = get_bf2_bone_names(rig)
     if not bone_names:
         raise ImportException(
             f"Armature '{rig.name}' is not a Battlefield 2 skeleton"

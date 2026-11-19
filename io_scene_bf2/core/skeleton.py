@@ -10,9 +10,46 @@ from .utils.convert import to_matrix, conv_bf2_to_blender, conv_blender_to_bf2
 # BF2 hardcoded limits, binary can be easily hacked to support more if needed
 MAX_ITEMS_1P = 16
 MAX_ITEMS_3P = 8
+BF2_BONE_NAME_PROPERTY = 'bf2_name'
 
 def ske_get_bone_rot(bone):
     return Matrix(bone.get('bf2_rot_fix', Matrix.Identity(4)))
+
+
+def get_bf2_bone_names(rig):
+    bone_names = list(rig.get('bf2_bones') or [])
+    if len(set(bone_names)) == len(bone_names):
+        return bone_names
+
+    armature_bones = list(rig.data.bones)
+    if len(armature_bones) < len(bone_names):
+        raise ImportException(
+            f"Armature '{rig.name}' has fewer bones than its BF2 bone map"
+        )
+
+    mapped_bones = armature_bones[:len(bone_names)]
+    for source_name, bone in zip(bone_names, mapped_bones):
+        stored_source_name = bone.get(BF2_BONE_NAME_PROPERTY)
+        suffix = bone.name[len(source_name):]
+        if (
+            stored_source_name != source_name
+            and bone.name != source_name
+            and not (
+                bone.name.startswith(source_name)
+                and suffix.startswith('.')
+                and suffix[1:].isdigit()
+            )
+        ):
+            raise ImportException(
+                f"Cannot map duplicate BF2 bone '{source_name}' "
+                f"to armature '{rig.name}'"
+            )
+        bone[BF2_BONE_NAME_PROPERTY] = source_name
+
+    mapped_names = [bone.name for bone in mapped_bones]
+    rig['bf2_bones'] = mapped_names
+    return mapped_names
+
 
 # minimum consensus below which the children are considered to point in opposing directions
 # and the bone keeps its default orientation instead of being tilted toward one of them
@@ -82,7 +119,7 @@ def _ske_bone_direction(node, _dir_cache=None):
     return direction
 
 def ske_weapon_part_ids(rig):
-    ske_bones = rig['bf2_bones']
+    ske_bones = get_bf2_bone_names(rig)
     ids = list()
     ske_name = rig.name.lower()
     for i, ske_bone in enumerate(ske_bones):
@@ -176,9 +213,6 @@ def import_skeleton(context, skeleton_file, fix_bone_dir=True, reload=False):
     context.scene.collection.objects.link(rig)
     context.view_layer.objects.active = rig
 
-    # add skeleton bone list to rig
-    rig['bf2_bones'] = [n.name for n in skeleton.node_list()]
-
     bpy.ops.object.mode_set(mode='EDIT')
 
     # fix node pos/rot
@@ -186,9 +220,19 @@ def import_skeleton(context, skeleton_file, fix_bone_dir=True, reload=False):
     for node in nodes:
         node.pos, node.rot = conv_bf2_to_blender(node.pos, node.rot)
 
+    node_to_bone = {
+        node: armature.edit_bones.new(node.name)
+        for node in nodes
+    }
+    rig['bf2_bones'] = [
+        node_to_bone[node].name
+        for node in nodes
+    ]
+    weapon_part_ids = set(ske_weapon_part_ids(rig))
+
     for i, node in enumerate(nodes):
-        
-        bone = armature.edit_bones.new(node.name)
+        bone = node_to_bone[node]
+        bone[BF2_BONE_NAME_PROPERTY] = node.name
         
         # transform is in armature space, so first need to move bone to origin
         bone.head = [0, 0, 0]
@@ -232,7 +276,7 @@ def import_skeleton(context, skeleton_file, fix_bone_dir=True, reload=False):
         for p in parents:
             armature_space_matrix @= to_matrix(p.pos, p.rot)
         
-        if i in ske_weapon_part_ids(rig):
+        if i in weapon_part_ids:
             # have to keep all wepon parts in scene origin
             # otherwise weapon parts may not map properly later
             matrix = Matrix.Identity(4)
@@ -244,7 +288,7 @@ def import_skeleton(context, skeleton_file, fix_bone_dir=True, reload=False):
         
         # link bones
         if node.parent:
-            bone.parent = armature.edit_bones[node.parent.name]
+            bone.parent = node_to_bone[node.parent]
     
     bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -256,8 +300,20 @@ def export_skeleton(rig, ske_file):
     armature = rig.data
     skeleton = BF2Skeleton(name=rig.name)
 
+    bf2_bone_names = get_bf2_bone_names(rig)
+    bf2_bone_name_set = set(bf2_bone_names)
+    bones = [
+        armature.bones[bone_name]
+        for bone_name in bf2_bone_names
+    ]
+    bones.extend(
+        bone
+        for bone in armature.bones
+        if bone.name not in bf2_bone_name_set
+    )
+
     nodes = dict()
-    for index, bone in enumerate(armature.bones):
+    for index, bone in enumerate(bones):
         parent_matrix = Matrix.Identity(4)
         if bone.parent:
             parent_matrix = bone.parent.matrix_local.copy() @ ske_get_bone_rot(bone.parent).inverted()
@@ -265,11 +321,12 @@ def export_skeleton(rig, ske_file):
 
         pos, rot, _ = matrix.decompose()
         pos, rot = conv_blender_to_bf2(pos, rot)
-        nodes[bone.name] = BF2Skeleton.Node(index, bone.name, pos, rot)
+        source_name = bone.get(BF2_BONE_NAME_PROPERTY, bone.name)
+        nodes[bone.name] = BF2Skeleton.Node(index, source_name, pos, rot)
 
     # relations
-    for _, node in nodes.items():
-        bone = armature.bones[node.name]
+    for bone_name, node in nodes.items():
+        bone = armature.bones[bone_name]
         for child in bone.children:
             node.children.append(nodes[child.name])
         if bone.parent:

@@ -5,13 +5,14 @@ from mathutils import Matrix # type: ignore
 from .bf2.bf2_animation import BF2Animation, BF2KeyFrame, BF2AnimationException
 from .utils import file_name
 from .skeleton import (ske_get_bone_rot,
-                       find_animated_weapon_object, ske_weapon_part_ids)
+                       find_animated_weapon_object, ske_weapon_part_ids,
+                       get_bf2_bone_names)
 from .exceptions import ImportException, ExportException
 from .utils.convert import conv_bf2_to_blender, conv_blender_to_bf2, to_matrix
 from .utils.compat import iter_action_fcurves
 
 def get_bones_for_export(rig):
-    ske_bones = rig['bf2_bones']
+    ske_bones = get_bf2_bone_names(rig)
 
     prev = rig.get('bones_to_export')
     if prev is not None:
@@ -46,7 +47,7 @@ def export_animation(context, rig, baf_file, bones_to_export=None, fstart=None, 
 
     saved_frame = scene.frame_current
     
-    ske_bones = rig['bf2_bones']
+    ske_bones = get_bf2_bone_names(rig)
 
     if bones_to_export is None:
         bones_to_export = ske_bones
@@ -125,7 +126,7 @@ def import_animation(context, rig, baf_file, insert_at_frame=0, to_new_action=Tr
 
     scene.render.fps = 24 # BF2 hardcoded default
 
-    ske_bones = rig['bf2_bones']
+    ske_bones = get_bf2_bone_names(rig)
 
     # get 'rest' pose matrix in armature space
     bone_to_rest_matrix = dict()

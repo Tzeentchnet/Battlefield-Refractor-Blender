@@ -198,7 +198,8 @@ StaticMesh `envmap` fallback. The hover tank and battle walkers demonstrate
 articulated ObjectTemplate import and automatic selection of their complete
 Geom1 exterior states. For both walkers, the importer also loads the declared
 bundle skeleton, constrains each rigid geometry part to its `boneIndex`, and
-plays the original 24 FPS walk action.
+plays the original 24 FPS walk action. Skeleton tracks are matched by index,
+including the PAC skeleton's duplicate source bone names.
 
 ## Installation
 

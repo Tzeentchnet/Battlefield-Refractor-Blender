@@ -15,8 +15,12 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT))
 
 import io_scene_bf2
+from io_scene_bf2.core.animation import import_animation
+from io_scene_bf2.core.bf2.bf2_animation import BF2Animation, BF2KeyFrame
+from io_scene_bf2.core.bf2.bf2_common import Vec3
 from io_scene_bf2.core.collision_mesh import import_collisionmesh
 from io_scene_bf2.core.bf2.bf2_engine import BF2Engine
+from io_scene_bf2.core.bf2.bf2_skeleton import BF2Skeleton
 from io_scene_bf2.core.bf2.bf2_terrain import (
     BF2Terrain,
     BF2TerrainMaterial,
@@ -43,8 +47,15 @@ from io_scene_bf2.core.object_template import (
     import_object_template,
 )
 from io_scene_bf2.core.road import import_compiled_roads
+from io_scene_bf2.core.skeleton import (
+    BF2_BONE_NAME_PROPERTY,
+    export_skeleton,
+    get_bf2_bone_names,
+    import_skeleton,
+)
 from io_scene_bf2.core.terrain import make_primary_terrain_material
 from io_scene_bf2.core.utils import convert_to_dds, save_img_as_dds
+from io_scene_bf2.core.utils.compat import iter_action_fcurves
 from io_scene_bf2.core.utils.image import array_to_image, image_to_array
 from io_scene_bf2.core.utils.mesh import set_mesh_geometry
 from io_scene_bf2.core.tools.lightmapping.scene import (
@@ -558,6 +569,101 @@ def _assert_bundle_skeleton_constraints(context):
         bpy.data.objects.remove(obj, do_unlink=True)
 
 
+def _assert_duplicate_skeleton_bone_names(context):
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        temporary_dir = Path(temporary_dir)
+        skeleton_path = temporary_dir / "DuplicateBones.ske"
+        animation_path = temporary_dir / "DuplicateBones.baf"
+        exported_path = temporary_dir / "DuplicateBonesExported.ske"
+
+        skeleton = BF2Skeleton(name="DuplicateBones")
+        root_a = BF2Skeleton.Node(0, "root")
+        child_a = BF2Skeleton.Node(1, "leg", pos=Vec3(0.0, 0.0, 1.0))
+        root_b = BF2Skeleton.Node(2, "root", pos=Vec3(2.0, 0.0, 0.0))
+        child_b = BF2Skeleton.Node(3, "leg", pos=Vec3(0.0, 0.0, 1.0))
+        root_a.append(child_a)
+        root_b.append(child_b)
+        skeleton.roots.extend((root_a, root_b))
+        skeleton.export(str(skeleton_path))
+
+        rig = import_skeleton(
+            context,
+            str(skeleton_path),
+            fix_bone_dir=False,
+            reload=True,
+        )
+        expected_names = ["root", "leg", "root.001", "leg.001"]
+        if list(rig["bf2_bones"]) != expected_names:
+            raise AssertionError("Duplicate skeleton bone indices are ambiguous")
+        if rig.data.bones["leg.001"].parent != rig.data.bones["root.001"]:
+            raise AssertionError("Duplicate skeleton parent mapped to the wrong bone")
+        if (
+            rig.data.bones["root.001"].get(BF2_BONE_NAME_PROPERTY) != "root"
+            or rig.data.bones["leg.001"].get(BF2_BONE_NAME_PROPERTY) != "leg"
+        ):
+            raise AssertionError("Original duplicate skeleton names were not saved")
+
+        rig["bf2_bones"] = ["root", "leg", "root", "leg"]
+        if get_bf2_bone_names(rig) != expected_names:
+            raise AssertionError("Legacy duplicate bone map was not repaired")
+
+        animation = BF2Animation()
+        animation.frame_num = 2
+        animation.bones = {
+            0: [BF2KeyFrame(), BF2KeyFrame()],
+            1: [
+                BF2KeyFrame(pos=Vec3(0.0, 0.0, 1.0)),
+                BF2KeyFrame(pos=Vec3(0.0, 0.0, 1.0)),
+            ],
+            2: [
+                BF2KeyFrame(pos=Vec3(3.0, 0.0, 0.0)),
+                BF2KeyFrame(pos=Vec3(3.0, 0.0, 0.0)),
+            ],
+            3: [
+                BF2KeyFrame(pos=Vec3(0.0, 0.0, 1.0)),
+                BF2KeyFrame(pos=Vec3(0.0, 0.0, 1.0)),
+            ],
+        }
+        animation.export(str(animation_path))
+        action = import_animation(context, rig, str(animation_path))
+        context.scene.frame_set(0)
+        context.view_layer.update()
+        animated_paths = {
+            fcurve.data_path
+            for fcurve in iter_action_fcurves(action)
+        }
+        if not any('pose.bones["root.001"]' in path for path in animated_paths):
+            raise AssertionError("Duplicate bone animation targeted the first bone")
+        if np.allclose(
+            rig.pose.bones["root"].matrix_basis,
+            rig.pose.bones["root.001"].matrix_basis,
+            atol=1e-4,
+        ):
+            raise AssertionError("Duplicate bone animation tracks were combined")
+
+        export_skeleton(rig, str(exported_path))
+        exported = BF2Skeleton(str(exported_path))
+        exported_nodes = exported.node_list()
+        exported_names = [node.name for node in exported_nodes]
+        if exported_names != [
+            "root",
+            "leg",
+            "root",
+            "leg",
+        ]:
+            raise AssertionError(
+                f"Duplicate source bone names were not exported: "
+                f"{exported_names}"
+            )
+        if exported_nodes[3].parent is not exported_nodes[2]:
+            raise AssertionError("Duplicate skeleton parent was not exported")
+
+        armature = rig.data
+        bpy.data.objects.remove(rig, do_unlink=True)
+        bpy.data.armatures.remove(armature)
+        bpy.data.actions.remove(action)
+
+
 def _assert_hidden_object_template_import(context, con_filepath):
     root = import_object_template(
         context,
@@ -617,6 +723,7 @@ def main():
         _assert_terrain_settings()
         _assert_hidden_import_collections(bpy.context)
         _assert_bundle_skeleton_constraints(bpy.context)
+        _assert_duplicate_skeleton_bone_names(bpy.context)
 
         mesh = bpy.data.meshes.new("BatchGeometryIntegration")
         set_mesh_geometry(

@@ -3,7 +3,7 @@ import bpy # type: ignore
 from bpy.props import PointerProperty, StringProperty # type: ignore
 from .utils import RegisterFactory
 from ..core.tools.anim_utils import update_nla_setup, uncovered_mute_bones
-from ..core.skeleton import is_bf2_skeleton
+from ..core.skeleton import get_bf2_bone_names, is_bf2_skeleton
 
 def _find_rig_for_action(action):
     if action is None:
@@ -16,7 +16,7 @@ def _find_rig_for_action(action):
 def _get_bf2_bone_id(armature, bone_name):
     if not armature or not bone_name:
         return -1
-    bf2_bones = list(armature.get('bf2_bones') or [])
+    bf2_bones = get_bf2_bone_names(armature)
     if bone_name not in bf2_bones:
         return -1
     return bf2_bones.index(bone_name)

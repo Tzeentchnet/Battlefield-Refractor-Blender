@@ -15,7 +15,7 @@ from ...core.tools.anim_utils import (
     update_nla_setup,
     Mode,
     AnimationContext)
-from ...core.skeleton import is_bf2_skeleton
+from ...core.skeleton import get_bf2_bone_names, is_bf2_skeleton
 from ...core.utils import Reporter
 
 def _bf2_setup_started(context, rig):
@@ -173,7 +173,7 @@ def _on_weapon_anim_system_update(self, context):
     _set_weapon_mesh(self, anim_file)
 
 def _set_cutoff_bone(rig, action, bone_id):
-    bones = list(rig.get('bf2_bones') or []) if rig else []
+    bones = get_bf2_bone_names(rig) if rig else []
     if bone_id < 0 or bone_id >= len(bones):
         return False
     action.bf2_ignore_mother_orientation = bones[bone_id]
